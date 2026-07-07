@@ -1,0 +1,2773 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>📬 收發文管理系統 (FSM)</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap"
+        rel="stylesheet">
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+                        display: ['Outfit', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        slate: {
+                            950: '#030712',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        /* 美化精細捲動條 */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.4);
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(99, 102, 241, 0.25);
+            border-radius: 99px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(99, 102, 241, 0.5);
+        }
+    </style>
+</head>
+
+<body class="bg-slate-50 text-slate-800 flex flex-col h-screen overflow-hidden select-none" x-data="bismsApp()">
+
+    <!-- 頂部精簡導覽列 (整合儀表板) -->
+    <header
+        class="bg-white border-b border-slate-200 px-5 py-2 shrink-0 flex items-center justify-between z-10 shadow-sm">
+        <div class="flex items-center gap-3">
+            <div class="p-1.5 bg-indigo-50 border border-indigo-100 rounded-xl text-indigo-600">
+                <i data-lucide="mail-open" class="w-4 h-4"></i>
+            </div>
+            <div class="flex flex-col gap-0.5">
+                <h1 class="font-display font-bold text-xs md:text-sm tracking-wide text-slate-900">收發文進度管理系統</h1>
+                <!-- 迷你導覽切換 Tabs -->
+                <div
+                    class="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200 mt-1 shrink-0 w-fit shadow-inner">
+                    <button @click="currentTab = 'docs'"
+                        :class="currentTab === 'docs' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200/60'"
+                        class="px-2 py-0.5 rounded-md text-[10px] font-semibold transition-all flex items-center gap-1">
+                        <i data-lucide="file-text" class="w-2.5 h-2.5"></i>
+                        <span>文管</span>
+                    </button>
+                    <button @click="currentTab = 'systemConfig'"
+                        :class="currentTab === 'systemConfig' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200/60'"
+                        class="px-2 py-0.5 rounded-md text-[10px] font-semibold transition-all flex items-center gap-1">
+                        <i data-lucide="sliders" class="w-2.5 h-2.5"></i>
+                        <span>設定</span>
+                    </button>
+                    <button @click="currentTab = 'flowConfig'"
+                        :class="currentTab === 'flowConfig' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200/60'"
+                        class="px-2 py-0.5 rounded-md text-[10px] font-semibold transition-all flex items-center gap-1">
+                        <i data-lucide="git-branch" class="w-2.5 h-2.5"></i>
+                        <span>流程</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 環境識別與重新整理 -->
+        <div class="flex items-center gap-2">
+            <div x-show="isLocalMock"
+                class="px-2 py-0.5 bg-amber-100 border border-amber-200 text-amber-700 text-[9px] font-mono font-semibold rounded">
+                OFFLINE PREVIEW MOCK
+            </div>
+            <button @click="refreshData()" :disabled="loading"
+                class="p-1.5 bg-white hover:bg-slate-100 disabled:opacity-50 text-slate-700 rounded-lg transition-all border border-slate-300 shadow-sm">
+                <i data-lucide="rotate-cw" :class="loading ? 'animate-spin' : ''" class="w-3.5 h-3.5"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- 主要工作區 (分流頁籤) -->
+    <main class="flex-grow flex overflow-hidden relative bg-slate-100">
+        <!-- 右側主要內容區 (Right Main Panel) -->
+        <div class="flex-grow h-full overflow-hidden relative bg-white">
+
+            <!-- ==================== [頁籤一：收發公文管理] ==================== -->
+            <div x-show="currentTab === 'docs'" class="w-full h-full flex flex-col overflow-hidden">
+
+                <!-- 頂部儀表板 (Dashboard) -->
+                <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 shrink-0">
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 max-w-7xl mx-auto">
+                        <!-- 處理中 -->
+                        <button @click="dashboardFilter = (dashboardFilter === 'inProgress' ? 'all' : 'inProgress')"
+                            :class="dashboardFilter === 'inProgress' ? 'bg-amber-500/10 border-amber-500 text-amber-800 ring-1 ring-amber-500/20 shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-800'"
+                            class="flex items-center justify-between gap-3 px-3 py-2 rounded-xl border text-xs font-bold transition-all shadow-sm cursor-pointer">
+                            <div class="flex items-center gap-1.5 min-w-0">
+                                <span class="relative flex h-2 w-2 shrink-0">
+                                    <span
+                                        class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                                    <span class="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                                </span>
+                                <span class="truncate">處理中</span>
+                            </div>
+                            <span
+                                :class="dashboardFilter === 'inProgress' ? 'bg-amber-500 text-white' : 'bg-amber-100/70 text-amber-850 border-amber-200'"
+                                class="font-mono text-xs px-2 py-0.2 border font-bold rounded-lg shrink-0"
+                                x-text="masters.filter(m => isInProgress(m)).length"></span>
+                        </button>
+
+                        <!-- 已逾期 -->
+                        <button @click="dashboardFilter = (dashboardFilter === 'overdue' ? 'all' : 'overdue')"
+                            :class="dashboardFilter === 'overdue' ? 'bg-rose-500/10 border-rose-500 text-rose-800 ring-1 ring-rose-500/20 shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-800'"
+                            class="flex items-center justify-between gap-3 px-3 py-2 rounded-xl border text-xs font-bold transition-all shadow-sm cursor-pointer">
+                            <div class="flex items-center gap-1.5 min-w-0">
+                                <span class="relative flex h-2 w-2 shrink-0">
+                                    <span
+                                        class="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                    <span class="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+                                </span>
+                                <span class="truncate">已逾期</span>
+                            </div>
+                            <span
+                                :class="dashboardFilter === 'overdue' ? 'bg-rose-500 text-white' : 'bg-rose-100/70 text-rose-850 border-rose-200'"
+                                class="font-mono text-xs px-2 py-0.5 border font-bold rounded-lg shrink-0"
+                                x-text="masters.filter(m => isOverdue(m)).length"></span>
+                        </button>
+
+                        <!-- 已結案 -->
+                        <button @click="dashboardFilter = (dashboardFilter === 'closed' ? 'all' : 'closed')"
+                            :class="dashboardFilter === 'closed' ? 'bg-emerald-500/10 border-emerald-500 text-emerald-800 ring-1 ring-emerald-500/20 shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-800'"
+                            class="hidden sm:flex items-center justify-between gap-3 px-3 py-2 rounded-xl border text-xs font-bold transition-all shadow-sm cursor-pointer">
+                            <div class="flex items-center gap-1.5 min-w-0">
+                                <span class="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+                                <span class="truncate">已結案</span>
+                            </div>
+                            <span
+                                :class="dashboardFilter === 'closed' ? 'bg-emerald-500 text-white' : 'bg-emerald-100/70 text-emerald-850 border-emerald-200'"
+                                class="font-mono text-xs px-2 py-0.2 border font-bold rounded-lg shrink-0"
+                                x-text="masters.filter(m => isClosed(m)).length"></span>
+                        </button>
+
+                        <!-- 總件數 -->
+                        <button @click="dashboardFilter = 'all'"
+                            :class="dashboardFilter === 'all' ? 'bg-indigo-500/10 border-indigo-500 text-indigo-800 ring-1 ring-indigo-500/20 shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-800'"
+                            class="hidden sm:flex items-center justify-between gap-3 px-3 py-2 rounded-xl border text-xs font-bold transition-all shadow-sm cursor-pointer">
+                            <div class="flex items-center gap-1.5 min-w-0">
+                                <i data-lucide="layers" class="w-3.5 h-3.5 text-indigo-500 shrink-0"></i>
+                                <span class="truncate">總件數</span>
+                            </div>
+                            <span
+                                :class="dashboardFilter === 'all' ? 'bg-indigo-600 text-white border-indigo-700' : 'bg-indigo-50 text-indigo-800 border-indigo-200'"
+                                class="font-mono text-xs px-2 py-0.2 border font-bold rounded-lg shrink-0"
+                                x-text="masters.length"></span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 篩選器與搜尋控制台 -->
+                <div class="p-3 bg-white border-b border-slate-200 shrink-0 shadow-sm space-y-2 flex flex-col">
+                    <div class="flex items-center gap-2 justify-between w-full">
+                        <!-- 關鍵字搜尋 -->
+                        <div class="relative flex-grow max-w-full ">
+                            <input type="text" x-model="filters.search" placeholder="搜尋案號、主旨..."
+                                class="w-full bg-slate-50 border border-slate-300 rounded-lg pl-8 pr-16 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-indigo-500 focus:bg-white transition-all">
+                            <i data-lucide="search" class="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-slate-400"></i>
+
+                            <!-- 嵌入搜尋框右側的重設按鈕 -->
+                            <button
+                                @click="filters.type = 'all'; filters.status = 'all'; filters.vendor = 'all'; filters.category = 'all'; filters.search = ''; dashboardFilter = 'all'"
+                                class="absolute right-1 top-1 px-1.5 py-0.5 text-[10px] text-indigo-600 hover:text-indigo-800 font-bold bg-white hover:bg-slate-50 border border-indigo-100 rounded shadow-sm flex items-center gap-0.5 transition-all cursor-pointer h-[22px]">
+                                <i data-lucide="filter-x" class="w-3 h-3 text-indigo-500"></i>
+                                <span class="hidden sm:inline">重設</span>
+                            </button>
+                        </div>
+                        <!-- 篩選折疊切換按鈕 (僅行動端顯示) -->
+                        <button @click="showMobileFilters = !showMobileFilters"
+                            :class="showMobileFilters ? 'bg-indigo-50 border-indigo-400 text-indigo-700 ring-1 ring-indigo-500/20' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50 hover:text-slate-800'"
+                            class="md:hidden px-2.5 py-1.5 border rounded-lg flex items-center justify-center gap-1 text-xs font-bold transition-all shadow-sm cursor-pointer">
+                            <i data-lucide="filter" class="w-3.5 h-3.5"></i>
+                            <span class="hidden sm:inline">篩選</span>
+                        </button>
+                        <!-- 登錄文件按鈕 (手機版只顯示圖示) -->
+                        <button @click="openCreateModal()"
+                            class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 font-bold text-white rounded-lg flex items-center justify-center gap-1.5 transition-all shadow-sm text-xs shrink-0 cursor-pointer">
+                            <i data-lucide="plus" class="w-4 h-4"></i>
+                            <span class="hidden sm:inline">登錄文件</span>
+                        </button>
+                    </div>
+                    <!-- 條件篩選下拉選單區：在桌面端 (md 以上) 保持可見，行動端 (md 以下) 點選篩選按鈕才展開 -->
+                    <div :class="showMobileFilters ? 'flex' : 'hidden md:flex'"
+                        class="flex-wrap items-center gap-2 pt-1 pb-1 transition-all">
+                        <select x-model="filters.status"
+                            class="bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:border-indigo-500 flex-grow md:flex-grow-0 min-w-[90px]">
+                            <option value="all">所有狀態</option>
+                            <template x-for="st in getUniqueStatuses()" :key="st">
+                                <option :value="st" x-text="st"></option>
+                            </template>
+                        </select>
+
+                        <select x-model="filters.type"
+                            class="bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:border-indigo-500 flex-grow md:flex-grow-0 min-w-[80px]">
+                            <option value="all">所有分類</option>
+                            <option value="收文">收文</option>
+                            <option value="發文">發文</option>
+                        </select>
+
+                        <select x-model="filters.vendor"
+                            class="bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:border-indigo-500 flex-grow md:flex-grow-0 min-w-[90px]">
+                            <option value="all">所有對象</option>
+                            <template x-for="v in getUniqueVendors()" :key="v">
+                                <option :value="v" x-text="v"></option>
+                            </template>
+                        </select>
+
+                        <select x-model="filters.category"
+                            class="bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 focus:outline-none focus:border-indigo-500 flex-grow md:flex-grow-0 min-w-[90px]">
+                            <option value="all">所有文類</option>
+                            <template x-for="cat in getUniqueCategories()" :key="cat">
+                                <option :value="cat" x-text="cat"></option>
+                            </template>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 列表及表格呈現區域 -->
+                <div class="flex-grow overflow-y-auto custom-scrollbar p-4 bg-slate-50/50">
+                    <div
+                        class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden h-full flex flex-col">
+                        <!-- 桌面端表格 (hidden md:block) -->
+                        <div class="hidden md:block overflow-x-auto">
+                            <table class="min-w-full divide-y divide-slate-200 text-left">
+                                <thead class="bg-slate-50">
+                                    <tr>
+                                        <th
+                                            class="px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                                            承辦現況</th>
+                                        <th
+                                            class="px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                                            文件編號</th>
+                                        <th
+                                            class="px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                                            往來對象</th>
+                                        <th
+                                            class="px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                                            主旨說明</th>
+                                        <th
+                                            class="px-5 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                                            分享連結</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-slate-100">
+                                    <template x-for="item in filteredMasters" :key="item.docId">
+                                        <tr @click="selectDocument(item)"
+                                            class="hover:bg-rose-100/30 transition-all cursor-pointer">
+                                            <!-- 承辦與目前狀態 -->
+                                            <td class="px-5 py-3.5 whitespace-nowrap">
+                                                <div class="flex flex-col gap-1">
+                                                    <span class="text-xs text-slate-500 font-medium"
+                                                        x-text="(item.assignee || '無')"></span>
+                                                    <div class="flex items-center gap-1.5">
+                                                        <span x-text="item.status || '未開始'"
+                                                            :class="item.status.includes('結案') || item.status === '已結案' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : (isOverdue(item) ? 'bg-rose-50 text-rose-700 border-rose-200 animate-pulse' : 'bg-indigo-50 text-indigo-700 border-indigo-150')"
+                                                            class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border"></span>
+                                                        <template x-if="isOverdue(item)">
+                                                            <span
+                                                                class="inline-flex items-center px-1.5 py-0.5 bg-rose-100 text-rose-800 text-[10px] font-bold rounded">已逾期</span>
+                                                        </template>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <!-- 公文案號與分類、登記日期 -->
+                                            <td class="px-5 py-3.5 whitespace-nowrap">
+                                                <div class="gap-1">
+                                                    <p x-text="item.docId"
+                                                        class="text-xs font-bold font-mono text-indigo-900"></p>
+                                                    <span x-text="item.type"
+                                                        :class="item.type === '收文' ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-amber-50 text-amber-700 border-amber-200'"
+                                                        class="px-1.5 py-0.5 rounded text-[10px] font-bold border w-max"></span>
+                                                    <span x-text="'登記：' + item.date"
+                                                        class="text-[10px] text-slate-500 font-mono"></span>
+                                                </div>
+                                            </td>
+                                            <!-- 往來對象與截止日期 -->
+                                            <td class="px-5 py-3.5 whitespace-nowrap">
+                                                <div class="flex flex-col gap-0.5">
+                                                    <span x-text="item.vendor || '—'"
+                                                        class="text-xs font-semibold text-slate-800"></span>
+                                                    <template x-if="item.dueDate">
+                                                        <span x-text="'截止：' + item.dueDate"
+                                                            :class="isOverdue(item) ? 'text-rose-600' : 'text-slate-500'"
+                                                            class="text-[10px] font-mono font-medium"></span>
+                                                    </template>
+                                                </div>
+                                            </td>
+                                            <!-- 主旨說明與分類標籤 -->
+                                            <td class="px-5 py-3.5">
+                                                <div class="flex flex-col gap-1 max-w-sm lg:max-w-md">
+                                                    <p x-text="item.subject || '—'"
+                                                        class="text-xs font-bold text-slate-800 truncate"
+                                                        :title="item.subject"></p>
+                                                    <div class="flex items-center gap-1.5">
+                                                        <span x-text="item.tag || '無'"
+                                                            class="px-1.5 py-0.2 bg-slate-100 border border-slate-200 text-slate-600 rounded text-[9px] font-medium"></span>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <!-- 分享 -->
+                                            <td class="px-5 py-3.5 whitespace-nowrap text-center">
+                                                <button @click.stop="copyDocumentLink(item)"
+                                                    class="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-600 text-indigo-700 hover:text-white border border-indigo-200 hover:border-indigo-600 rounded-lg text-xs font-bold transition-all flex items-center gap-1 mx-auto shadow-sm">
+                                                    🔗
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                    <template x-if="filteredMasters.length === 0">
+                                        <tr>
+                                            <td colspan="5" class="p-12 text-center text-xs text-slate-400 font-medium">
+                                                沒有符合篩選條件的公文
+                                            </td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- 行動端卡片 (md 以下) -->
+                        <div class="block md:hidden divide-y divide-slate-150 overflow-y-auto">
+                            <template x-for="item in filteredMasters" :key="item.docId">
+                                <div @click="copyDocumentLink(item)"
+                                    class="p-4 hover:bg-slate-50 active:bg-slate-100/60 transition-all cursor-pointer space-y-2 text-xs">
+                                    <div class="flex justify-between items-start gap-2">
+                                        <div class="flex items-center gap-1.5">
+                                            <span x-text="item.type"
+                                                :class="item.type === '收文' ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-amber-50 text-amber-700 border-amber-200'"
+                                                class="px-1.5 py-0 rounded text-[10px] font-bold border"></span>
+                                            <span x-text="item.docId"
+                                                class="text-[8px] font-bold text-indigo-700 font-mono"></span>
+                                        </div>
+                                        <span x-text="item.status || '未開始'"
+                                            :class="item.status.includes('結案') || item.status === '已結案' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : (isOverdue(item) ? 'bg-rose-50 text-rose-700 border-rose-200 animate-pulse' : 'bg-indigo-50 text-indigo-700 border-indigo-200')"
+                                            class="px-1.5 py-0 rounded text-[10px] font-bold border"></span>
+                                    </div>
+
+                                    <div>
+                                        <h4 x-text="item.subject"
+                                            class="text-xs font-bold text-slate-900 leading-snug line-clamp-2"></h4>
+                                    </div>
+
+                                    <div
+                                        class="grid grid-cols-2 gap-y-1.5 text-[11px] text-slate-500 pt-2 border-t border-slate-100">
+                                        <div><span class="text-slate-400">對象:</span> <span
+                                                class="font-bold text-slate-700" x-text="item.vendor || '—'"></span>
+                                        </div>
+                                        <div><span class="text-slate-400">承辦:</span> <span
+                                                class="font-bold text-slate-700" x-text="item.assignee || '—'"></span>
+                                        </div>
+                                        <div><span class="text-slate-400">登記:</span> <span
+                                                class="font-mono text-slate-600" x-text="item.date || '—'"></span></div>
+                                        <div><span class="text-slate-400">截止:</span>
+                                            <span
+                                                :class="isOverdue(item) ? 'text-rose-600 font-bold' : 'text-slate-600'"
+                                                class="font-mono flex items-center gap-1 inline-flex">
+                                                <span x-text="item.dueDate || '—'"></span>
+                                                <template x-if="isOverdue(item)">
+                                                    <span
+                                                        class="px-1.5 py-0.5 bg-rose-100 text-rose-800 text-[9px] font-bold rounded">逾期</span>
+                                                </template>
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    <div
+                                        class="pt-2 flex justify-between items-center text-[11px] text-indigo-600 font-semibold">
+                                        <span class="flex items-center gap-1">
+                                            詳細資訊
+                                            <i data-lucide="chevron-right" class="w-3.5 h-3.5"></i>
+                                        </span>
+                                    </div>
+                                </div>
+                            </template>
+                            <template x-if="filteredMasters.length === 0">
+                                <div class="p-12 text-center text-xs text-slate-400 font-medium">
+                                    沒有符合篩選條件的公文
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- ==================== [頁籤二：系統參數設定] ==================== -->
+            <div x-show="currentTab === 'systemConfig'" class="w-full h-full p-5 overflow-y-auto custom-scrollbar"
+                style="display: none;">
+                <div class="max-w-4xl mx-auto space-y-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h2 class="font-display font-bold text-sm text-slate-900">常規往來與字號對應設定</h2>
+                            <p class="text-[10px] text-slate-500">設定特定分類標籤下的字號字軌與專案預設承辦負責人員</p>
+                        </div>
+                        <div class="flex gap-2">
+                            <button @click="openAddConfigModal()"
+                                class="px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold flex items-center gap-1 shadow-sm">
+                                <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                                新增項目
+                            </button>
+                            <button @click="saveSystemConfig()" :disabled="saving"
+                                class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 font-bold text-white rounded-lg text-xs flex items-center gap-1 shadow">
+                                <i data-lucide="save" class="w-3.5 h-3.5"></i>
+                                儲存設定
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 編輯表 -->
+                    <div class="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                        <table class="w-full text-xs text-left">
+                            <thead class="bg-slate-50 border-b border-slate-200 text-slate-650 uppercase font-semibold">
+                                <tr>
+                                    <th class="p-3">往來單位對象</th>
+                                    <th class="p-3">分類標籤</th>
+                                    <th class="p-3">字號前綴</th>
+                                    <th class="p-3">預設承辦人</th>
+                                    <th class="p-3">預設範本 ID</th>
+                                    <th class="p-3 text-center">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-200">
+                                <template x-for="(row, idx) in configs" :key="idx">
+                                    <tr @click="openEditConfigModal(idx)"
+                                        class="hover:bg-indigo-50/40 cursor-pointer transition-all text-slate-750">
+                                        <td class="p-3 font-semibold text-slate-800" x-text="row.vendor || '（未設定）'">
+                                        </td>
+                                        <td class="p-3">
+                                            <span
+                                                class="px-2 py-0.5 bg-slate-100 text-slate-700 border border-slate-200 rounded font-bold text-[10px]"
+                                                x-text="row.tag || '（未設定）'"></span>
+                                        </td>
+                                        <td class="p-3 font-mono text-indigo-600 font-bold"
+                                            x-text="row.prefix || '（無）'"></td>
+                                        <td class="p-3 text-slate-600" x-text="row.assignee || '（未指定）'"></td>
+                                        <td class="p-3 font-mono text-[10px] text-slate-400 truncate max-w-[150px]"
+                                            x-text="row.templateId || '（無）'" :title="row.templateId"></td>
+                                        <td class="p-3 text-center">
+                                            <div class="flex items-center justify-center gap-1.5">
+                                                <button @click.stop="openEditConfigModal(idx)"
+                                                    class="p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-all"
+                                                    title="編輯項目">
+                                                    <i data-lucide="edit" class="w-3.5 h-3.5"></i>
+                                                </button>
+                                                <button @click.stop="deleteConfigRow(idx)"
+                                                    class="p-1 text-rose-600 hover:bg-rose-50 rounded transition-all"
+                                                    title="刪除項目">
+                                                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div
+                        class="bg-slate-50 border border-slate-200 p-4 rounded-xl text-[11px] leading-relaxed text-slate-650 space-y-1 shadow-sm">
+                        <h4 class="font-bold text-slate-850">💡 系統說明：</h4>
+                        <p>1. 系統登公文時，會依據您選取的「分類標籤」查詢對應的「前綴」，並結合當前民國年月日(如1150704)自動往後給號 (例：S115070401)。</p>
+                        <p>2. 「範本ID」是 Google 文件的
+                            ID。若此標籤設定了範本，當公文起草且尚未上傳附件時，系統會顯示「套用預設範本」按鈕，點擊即可自動複製此範本並鏈結成公文檔案，極大簡化起草工作。</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ==================== [頁籤三：流程配置設定 (FSM Flow Config)] ==================== -->
+            <div x-show="currentTab === 'flowConfig'" class="w-full h-full p-5 overflow-y-auto custom-scrollbar"
+                style="display: none;">
+                <div class="max-w-6xl mx-auto space-y-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h2 class="font-display font-bold text-sm text-slate-900">FSM 狀態機關卡流程配置表</h2>
+                            <p class="text-[10px] text-slate-500">定義收發分類下的關卡順序、生命週期階段、當前狀態與允許推進的動作，建構流程大腦 (FSM Config)
+                            </p>
+                        </div>
+                        <div class="flex gap-2">
+                            <button @click="openAddFlowModal()"
+                                class="px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all shadow-sm">
+                                <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                                新增項目
+                            </button>
+                            <button @click="saveFlowConfig()" :disabled="saving"
+                                class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 font-bold text-white rounded-lg text-xs flex items-center gap-1 shadow transition-all">
+                                <i data-lucide="save" class="w-3.5 h-3.5"></i>
+                                儲存配置
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 編輯表 -->
+                    <div class="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                        <div class="overflow-x-auto custom-scrollbar">
+                            <table class="w-full text-xs text-left min-w-[1000px]">
+                                <thead
+                                    class="bg-slate-50 border-b border-slate-200 text-slate-650 uppercase font-semibold">
+                                    <tr>
+                                        <th class="p-3 w-24">分類</th>
+                                        <th class="p-3 w-16 text-center">順序</th>
+                                        <th class="p-3 w-36">階段</th>
+                                        <th class="p-3 text-center">目前狀態</th>
+                                        <th class="p-3 text-center">觸發動作</th>
+                                        <th class="p-3 text-center">後續狀態</th>
+                                        <th class="p-3">觸動說明</th>
+                                        <th class="p-3 text-center w-20">附件</th>
+                                        <th class="p-3 text-center w-20">期限</th>
+                                        <th class="p-3 text-center w-20">簽章</th>
+                                        <th class="p-3 text-center w-20">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-200">
+                                    <template x-for="(row, idx) in flowConfigs" :key="idx">
+                                        <tr @click="openEditFlowModal(idx)"
+                                            class="hover:bg-indigo-50/40 cursor-pointer transition-all text-slate-750">
+                                            <td class="p-3">
+                                                <span
+                                                    :class="row.type === '收文' ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-amber-50 text-amber-700 border-amber-200'"
+                                                    class="px-2 py-0.5 rounded border text-[10px] font-bold"
+                                                    x-text="row.type"></span>
+                                            </td>
+                                            <td class="p-3 font-mono text-center font-bold text-slate-600"
+                                                x-text="row.order"></td>
+                                            <td class="p-3 font-semibold text-slate-800" x-text="row.phase || '（未設定）'">
+                                            </td>
+                                            <td class="p-3 text-center">
+                                                <span
+                                                    class="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded font-bold text-[10px]"
+                                                    x-text="row.status || '（空）'"></span>
+                                            </td>
+                                            <td class="p-3 text-center">
+                                                <span
+                                                    class="px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded font-bold text-[10px]"
+                                                    x-text="row.action || '（空）'"></span>
+                                            </td>
+                                            <td class="p-3 text-center">
+                                                <span
+                                                    class="px-2 py-0.5 bg-amber-50 text-amber-700 rounded font-bold text-[10px]"
+                                                    x-text="row.nextStatus || '（空）'"></span>
+                                            </td>
+                                            <td class="p-3 text-slate-500 truncate max-w-[200px]"
+                                                x-text="row.defaultDesc || '—'" :title="row.defaultDesc"></td>
+                                            <td class="p-3 text-center">
+                                                <span
+                                                    :class="row.reqFile === '是' ? 'text-emerald-600 font-bold bg-emerald-50 border border-emerald-150 px-1.5 py-0.2 rounded' : 'text-slate-400'"
+                                                    x-text="row.reqFile"></span>
+                                            </td>
+                                            <td class="p-3 text-center">
+                                                <span
+                                                    :class="row.reqDueDate !== '否' ? 'text-indigo-650 font-bold bg-indigo-50 border border-indigo-150 px-1.5 py-0.2 rounded' : 'text-slate-400'"
+                                                    x-text="row.reqDueDate"></span>
+                                            </td>
+                                            <td class="p-3 text-center">
+                                                <span
+                                                    :class="row.reqSignature === '是' ? 'text-emerald-600 font-bold bg-emerald-50 border border-emerald-150 px-1.5 py-0.2 rounded' : 'text-slate-400'"
+                                                    x-text="row.reqSignature"></span>
+                                            </td>
+                                            <td class="p-3 text-center">
+                                                <div class="flex items-center justify-center gap-1">
+                                                    <button @click.stop="openEditFlowModal(idx)"
+                                                        class="p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-all"
+                                                        title="編輯關卡">
+                                                        <i data-lucide="edit" class="w-3.5 h-3.5"></i>
+                                                    </button>
+                                                    <button @click.stop="deleteFlowRow(idx)"
+                                                        class="p-1 text-rose-600 hover:bg-rose-50 rounded transition-all"
+                                                        title="刪除關卡">
+                                                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div
+                        class="bg-slate-50 border border-slate-200 p-4 rounded-xl text-[11px] leading-relaxed text-slate-650 space-y-1 shadow-sm">
+                        <h4 class="font-bold text-slate-800">💡 流程狀態轉移邏輯 (FSM State Engine Guidelines)說明：</h4>
+                        <p>1. **FSM 邏輯驅動**：前端畫面的狀態流轉面板，會即時抓取此配置。當公文之「目前狀態」匹配本表「目前狀態」時，畫面才允許調用該條目之「觸發動作」。</p>
+                        <p>2. **流程鎖定機制**：在推進流程時，若「需要附件」設為是，則強制要求使用者當場拖曳或選取 PDF 檔案。若「需要線上簽名」為是，則強制要求錄入手寫簽章。</p>
+                        <p>3. **連鎖回發文邏輯**：當收文之允許動作設定為「啟動回文」時，後端核心會自動為本案開啟專屬的發文案號(案號後綴
+                            _回)以建立相互連結，此關卡轉換為系統高智慧連鎖設計，請勿擅自改動名稱。</p>
+                        <P>4. **結案判斷**：當「後續狀態」名稱中有包含「結案」字串時，流程進行到此狀態會判定成"已結案"。
+                            所以最後一關一定要出現「結案」字串（例如：已結案、已存查結案、已回覆結案、已簽收結案等。
+                            ) 才能形成閉環流程。</P>
+                    </div>
+                </div>
+            </div>
+
+    </main>
+
+
+    <!-- ==================== [彈出視窗：系統參數編輯彈窗] ==================== -->
+    <div x-show="showConfigEditModal"
+        class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[999]"
+        style="display: none;" x-transition>
+        <div
+            class="bg-white border border-slate-200 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+            <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between shrink-0">
+                <h3 class="font-display font-bold text-xs text-slate-800"
+                    x-text="configEditIndex === null ? '新增常規往來設定' : '編輯常規往來設定'"></h3>
+                <button @click="showConfigEditModal = false"
+                    class="p-1 text-slate-400 hover:text-slate-600 rounded-lg"><i data-lucide="x"
+                        class="w-4 h-4"></i></button>
+            </div>
+
+            <form @submit.prevent="saveConfigModal()"
+                class="overflow-y-auto custom-scrollbar p-5 space-y-3.5 text-xs flex-grow">
+                <div>
+                    <label class="block text-slate-600 font-semibold mb-1">往來單位對象</label>
+                    <input type="text" x-model="configForm.vendor" placeholder="例：中鼎工程"
+                        class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-[11px]"
+                        required>
+                </div>
+
+                <div>
+                    <label class="block text-slate-600 font-semibold mb-1">分類標籤 (不可重複)</label>
+                    <input type="text" x-model="configForm.tag" placeholder="例：安全檢查"
+                        class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-[11px]"
+                        required>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1">字號前綴</label>
+                        <input type="text" x-model="configForm.prefix" placeholder="例：S"
+                            class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-[11px]"
+                            required>
+                    </div>
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1">預設承辦人</label>
+                        <input type="text" x-model="configForm.assignee" placeholder="例：工地經理"
+                            class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-[11px]"
+                            required>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-slate-600 font-semibold mb-1">預設範本 ID (Google 雲端硬碟檔案 ID)</label>
+                    <input type="text" x-model="configForm.templateId" placeholder="例：1A2b3C4d5E... (選填)"
+                        class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 font-mono text-[10px] focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-slate-700">
+                </div>
+
+                <div class="pt-4 border-t border-slate-100 flex justify-end gap-2 shrink-0">
+                    <button type="button" @click="showConfigEditModal = false"
+                        class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-semibold rounded-lg transition-all">取消</button>
+                    <button type="submit"
+                        class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-md transition-all">套用變更</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ==================== [彈出視窗：FSM 流程配置編輯彈窗] ==================== -->
+    <div x-show="showFlowEditModal"
+        class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[999]"
+        style="display: none;" x-transition>
+        <div
+            class="bg-white border border-slate-200 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+            <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between shrink-0">
+                <h3 class="font-display font-bold text-xs text-slate-800"
+                    x-text="flowEditIndex === null ? '新增 FSM 流程配置' : '編輯 FSM 流程配置'"></h3>
+                <button @click="showFlowEditModal = false" class="p-1 text-slate-400 hover:text-slate-600 rounded-lg"><i
+                        data-lucide="x" class="w-4 h-4"></i></button>
+            </div>
+
+            <form @submit.prevent="saveFlowModal()"
+                class="overflow-y-auto custom-scrollbar p-5 space-y-3.5 text-xs flex-grow">
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1">分類</label>
+                        <select x-model="flowForm.type"
+                            class="w-full bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-[11px]"
+                            required>
+                            <option value="收文">收文</option>
+                            <option value="發文">發文</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1">關卡順序</label>
+                        <input type="number" x-model.number="flowForm.order" placeholder="例：1"
+                            class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-[11px]"
+                            required>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-slate-600 font-semibold mb-1">生命週期階段名稱</label>
+                    <input type="text" x-model="flowForm.phase" placeholder="例：1. 收件登記"
+                        class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-[11px]"
+                        required>
+                </div>
+
+                <div class="grid grid-cols-3 gap-2">
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1">目前狀態</label>
+                        <input type="text" x-model="flowForm.status" placeholder="例：待掃描"
+                            class="w-full bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-indigo-700 font-bold focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-[11px]"
+                            required>
+                    </div>
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1">觸發動作</label>
+                        <input type="text" x-model="flowForm.action" placeholder="例：收文簽收"
+                            class="w-full bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-emerald-700 font-bold focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-[11px]"
+                            required>
+                    </div>
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1">後續狀態</label>
+                        <input type="text" x-model="flowForm.nextStatus" placeholder="例：傳閱研判中"
+                            class="w-full bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-amber-700 font-bold focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-[11px]"
+                            required>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-slate-600 font-semibold mb-1">觸動預設說明文字</label>
+                    <input type="text" x-model="flowForm.defaultDesc" placeholder="例：完成線上收文登記..."
+                        class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-[11px]">
+                </div>
+
+                <div class="grid grid-cols-3 gap-2">
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1">強制需要附件</label>
+                        <select x-model="flowForm.reqFile"
+                            class="w-full bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-[11px]"
+                            required>
+                            <option value="否">否</option>
+                            <option value="是">是</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1">強制設定期限</label>
+                        <select x-model="flowForm.reqDueDate"
+                            class="w-full bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-[11px]"
+                            required>
+                            <option value="否">否</option>
+                            <option value="是">是</option>
+                            <option value="3">3天</option>
+                            <option value="7">7天</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1">強制線上簽名</label>
+                        <select x-model="flowForm.reqSignature"
+                            class="w-full bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-[11px]"
+                            required>
+                            <option value="否">否</option>
+                            <option value="是">是</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="pt-4 border-t border-slate-100 flex justify-end gap-2 shrink-0">
+                    <button type="button" @click="showFlowEditModal = false"
+                        class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-semibold rounded-lg transition-all">取消</button>
+                    <button type="submit"
+                        class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-md transition-all">套用變更</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ==================== [彈出視窗 1：新建登記公文] ==================== -->
+    <div x-show="showCreateModal"
+        class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-1 z-[999]"
+        style="display: none;">
+        <div
+            class="bg-white border border-slate-200 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[100vh]">
+            <!-- header -->
+            <div class="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between shrink-0">
+                <h3 class="font-display font-bold text-xs text-slate-800">文件收發登記</h3>
+                <button @click="showCreateModal = false" class="p-1 text-slate-400 hover:text-slate-600 rounded-lg"><i
+                        data-lucide="x" class="w-4 h-4"></i></button>
+            </div>
+
+            <!-- scrollable content -->
+            <form @submit.prevent="submitCreateDocument()"
+                class="overflow-y-auto custom-scrollbar px-5 py-2 space-y-2 text-xs flex-grow">
+                <!-- 收發分類 -->
+                <div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <button type="button"
+                            @click="newDocForm.type = '收文'; newDocForm.docId = ''; updateFormNextDocId();"
+                            :class="newDocForm.type === '收文' ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'"
+                            class="py-1.5 rounded-lg font-bold border transition-all">登記收文</button>
+                        <button type="button" @click="newDocForm.type = '發文'; updateFormNextDocId();"
+                            :class="newDocForm.type === '發文' ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'"
+                            class="py-1.5 rounded-lg font-bold border transition-all">登記發文</button>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2">
+                    <!-- 往來對象 -->
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1 text-[12px]">往來對象</label>
+                        <select x-model="newDocForm.vendor" @change="onFormVendorChange()"
+                            class="w-full bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none"
+                            required>
+                            <option value="">-- 請選擇 --</option>
+                            <template x-for="v in getUniqueVendors()" :key="v">
+                                <option :value="v" x-text="v"></option>
+                            </template>
+                        </select>
+                    </div>
+                    <!-- 分類標籤 -->
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1 text-[12px]">分類標籤</label>
+                        <select x-model="newDocForm.category" @change="updateFormNextDocId()"
+                            class="w-full bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none"
+                            required>
+                            <option value="">-- 請選擇 --</option>
+                            <template x-for="cat in getUniqueCategories()" :key="cat">
+                                <option :value="cat" x-text="cat"></option>
+                            </template>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 案號 -->
+                <div>
+                    <!-- 發文: 系統自動給號 -->
+                    <template x-if="newDocForm.type === '發文'">
+                        <div>
+                            <label class="block text-slate-600 font-semibold mb-1 text-[12px]">發文案號 (系統自動給號)</label>
+                            <input type="text" x-model="newDocForm.docId"
+                                class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 font-mono text-indigo-700 font-bold focus:outline-none"
+                                readonly>
+                        </div>
+                    </template>
+                    <!-- 收文: 由使用者輸入來文文號 -->
+                    <template x-if="newDocForm.type === '收文'">
+                        <div>
+                            <label class="block text-slate-600 font-semibold mb-1 text-[12px]">來文文號</label>
+                            <input type="text" placeholder="請輸入來文文號，例如：府建字第1120001234號"
+                                class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 font-mono text-slate-850 font-bold focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none"
+                                required>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- 主旨 -->
+                <div>
+                    <label class="block text-slate-600 font-semibold mb-1 text-[12px]">主旨說明</label>
+                    <input type="text" x-model="newDocForm.subject" placeholder="請輸入主旨與摘要說明"
+                        class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-slate-800 placeholder-slate-400 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none"
+                        required>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <!-- 負責承辦 -->
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1 text-[12px]">負責承辦</label>
+                        <input type="text" x-model="newDocForm.assignee"
+                            class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none">
+                    </div>
+                    <!-- 截止日期 -->
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1 text-[12px]">截止日期</label>
+                        <input type="date" x-model="newDocForm.dueDate"
+                            class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none">
+                    </div>
+                </div>
+
+                <!-- 檔案上傳 -->
+                <div>
+                    <label class="block text-slate-600 font-semibold mb-1 text-[12px]">附件上傳 (PDF / Word 格式)</label>
+                    <input type="file" @change="handleFormFileChange" accept="application/pdf,.doc,.docx"
+                        class="w-full text-slate-500 file:mr-3 file:py-1 file:px-2.5 file:rounded-lg file:border file:border-slate-300 file:text-xs file:font-semibold file:bg-slate-50 file:text-slate-700 hover:file:bg-slate-100 cursor-pointer">
+                </div>
+
+                <!-- footer actions -->
+                <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 shrink-0">
+                    <button type="button" @click="showCreateModal = false"
+                        class="px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 font-semibold rounded-lg border border-slate-300">取消</button>
+                    <button type="submit"
+                        class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 font-bold text-white rounded-lg shadow-sm">建立登記</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
+    <!-- ==================== [彈出視窗 2：FSM 移轉決策決議與狀態送審] ==================== -->
+    <div x-show="showActionModal"
+        class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[999]"
+        style="display: none;">
+        <div
+            class="bg-white border border-slate-200 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[95vh]">
+            <!-- header -->
+            <div class="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between shrink-0">
+                <div class="flex items-center gap-2">
+                    <span
+                        class="px-1.5 py-0.5 bg-indigo-600 text-white rounded text-[12px] font-bold font-mono">ACTION</span>
+                </div>
+                <button @click="showActionModal = false" class="p-1 text-slate-400 hover:text-slate-600 rounded-lg"><i
+                        data-lucide="x" class="w-4 h-4"></i></button>
+            </div>
+
+            <!-- scrollable content -->
+            <form @submit.prevent="submitFsmTransition()"
+                class="overflow-y-auto custom-scrollbar px-5 py-2 space-y-1.5 text-xs flex-grow">
+                <!-- 預計流轉明細 -->
+                <div
+                    class="bg-slate-50 p-3 rounded-xl border border-slate-200 flex items-center justify-between font-mono shrink-0 shadow-sm">
+                    <div>
+                        <span class="text-slate-500 text-[9px] block mb-0.5">文件現況</span>
+                        <div class="text-slate-700 font-bold text-xs" x-text="selectedDoc ? selectedDoc.status : ''">
+                        </div>
+                    </div>
+                    <div>＞
+                        <span x-text="(activeFlowRule ? activeFlowRule.action : '')"
+                            class="px-1.5 py-0.5 bg-indigo-600 text-white rounded font-bold font-mono"></span> ＞
+                    </div>
+                    <div class="text-right">
+                        <span class="text-indigo-600 text-[9px] font-bold block mb-0.5">執行後狀態</span>
+                        <div class="text-indigo-700 font-bold text-xs"
+                            x-text="activeFlowRule ? activeFlowRule.nextStatus : ''"></div>
+                    </div>
+                </div>
+
+                <!-- 處理說明 -->
+                <div>
+                    <label class="block text-slate-600 font-semibold mb-1 text-[11px]">說明與備註</label>
+                    <textarea x-model="transitionForm.description" placeholder="請輸入本次處理動作的具體內容說明..."
+                        class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-indigo-600 h-8 placeholder-slate-400 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none "
+                        required></textarea>
+                </div>
+
+                <!-- 截止日期 (若 FSM 要求) -->
+                <template x-if="activeFlowRule && activeFlowRule.reqDueDate !== '否'">
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1 text-[11px]">設定截止期限</label>
+                        <input type="date" x-model="transitionForm.dueDate"
+                            class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none text-[11px]"
+                            required>
+                    </div>
+                </template>
+
+                <!-- 上傳檔案 (若 FSM 要求) -->
+                <template x-if="activeFlowRule && activeFlowRule.reqFile === '是'">
+                    <div>
+                        <label class="block text-slate-600 font-semibold mb-1 text-[11px]">上傳指定檔案 (掃描檔 / 草稿 Word)
+                        </label>
+                        <input type="file" @change="handleTransitionFileChange" accept="application/pdf,.doc,.docx"
+                            class="w-full text-indigo-500 text-sm file:mr-3 file:py-1 file:px-2.5 file:rounded-lg file:border file:border-slate-300 file:text-[11px] file:font-semibold file:bg-slate-50 file:text-slate-700 hover:file:bg-slate-100 cursor-pointer"
+                            required>
+                    </div>
+                </template>
+
+                <!-- 簽名按鈕 (若 FSM 要求) -->
+                <template x-if="activeFlowRule && activeFlowRule.reqSignature === '是'">
+                    <div class="bg-indigo-50/50 p-2.5 rounded-lg border border-indigo-100">
+                        <label class="block text-indigo-900 font-bold mb-1.5">線上簽收</label>
+                        <div class="flex items-center gap-3">
+                            <button type="button" @click="openSignaturePanel()"
+                                class="px-3 py-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg font-semibold flex items-center gap-1.5 transition-all text-[11px] shadow-sm">
+                                開啟手寫簽名板
+                            </button>
+                            <span
+                                :class="transitionForm.signatureBase64 ? 'text-emerald-600 font-bold' : 'text-slate-500'"
+                                class="text-[11px]"
+                                x-text="transitionForm.signatureBase64 ? '✓ 線上簽收' : '⚠ 尚未簽收'"></span>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- footer actions -->
+                <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 shrink-0">
+                    <button type="button" @click="showActionModal = false"
+                        class="px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 font-semibold rounded-lg border border-slate-300 text-[11px]">取消</button>
+                    <button type="submit"
+                        class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 font-bold text-white rounded-lg shadow-sm text-[11px]">執行</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
+    <!-- ==================== [彈出視窗 3：電子手寫簽章板] ==================== -->
+    <div x-show="showSignaturePanel"
+        class="fixed inset-0 bg-slate-900/80 backdrop-blur-sm overflow-hidden flex items-center justify-center z-[1000]"
+        style="display: none;">
+        <div :class="isPortrait ? 'bg-white shadow-2xl flex flex-row overflow-hidden rounded-none border-none p-0' : 'bg-white border border-slate-200 rounded-2xl shadow-2xl flex flex-row my-auto transition-all duration-300 overflow-hidden w-full max-w-4xl h-[520px]'"
+            :style="isPortrait ? 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(90deg); width: 100vh; height: 100vw; max-width: none; max-height: none; z-index: 1001;' : ''">
+
+            <!-- 畫布區 (放至最大) -->
+            <div class="flex-grow bg-slate-50 relative overflow-hidden h-full">
+                <canvas id="sig-canvas" class="w-full h-full cursor-crosshair bg-white"></canvas>
+                <div
+                    class="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-none select-none text-slate-400 text-[11px] font-bold tracking-wider">
+                    ✍️ 請在此處親筆簽名 (滑鼠、觸控筆或手指均可)
+                </div>
+            </div>
+
+            <!-- 控制列 (移至右側) -->
+            <div
+                class="w-28 md:w-32 bg-slate-50 border-l border-slate-200 p-3 md:p-4 flex flex-col justify-between shrink-0 text-xs h-full">
+                <!-- 上半部資訊與清除 -->
+                <div class="flex flex-col gap-3">
+                    <div class="text-center py-1 border-b border-slate-200">
+                        <div class="font-display font-bold text-slate-700 text-[11px] md:text-xs">簽收單</div>
+                    </div>
+                    <button type="button" @click="clearSignature()"
+                        class="w-full py-2 bg-white hover:bg-slate-100 text-slate-700 font-semibold rounded-lg border border-slate-300 shadow-sm transition-all cursor-pointer">
+                        重寫
+                    </button>
+                </div>
+
+                <!-- 下半部取消與確認 -->
+                <div class="flex flex-col gap-2">
+                    <button type="button" @click="showSignaturePanel = false"
+                        class="w-full py-2 bg-white hover:bg-slate-100 text-slate-500 rounded-lg border border-slate-300 transition-all cursor-pointer">
+                        取消
+                    </button>
+                    <button type="button" @click="saveSignature()"
+                        class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 font-bold text-white rounded-lg shadow-sm transition-all cursor-pointer">
+                        儲存
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- ==================== [彈出視窗 4：公文詳情、決策歷程彈窗] ==================== -->
+    <div x-show="showDetailModal"
+        class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-1 md:p-4 z-[998]"
+        style="display: none;" x-transition>
+        <template x-if="selectedDoc">
+            <div
+                class="bg-white border border-slate-200 w-full max-w-4xl rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[98vh]">
+                <!-- header -->
+                <div class="px-5 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between shrink-0">
+                    <div class="justify-between items-center gap-2 text-left min-w-0">
+                        <div class="flex items-center gap-1.5 shrink-0">
+                            <span
+                                :class="selectedDoc.type === '收文' ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-amber-50 text-amber-700 border-amber-200'"
+                                class="px-2 py-0.5 rounded text-[10px] font-bold border"
+                                x-text="selectedDoc.type"></span>
+                            <span
+                                class="font-mono text-[10px] bg-slate-100 border border-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-bold"
+                                x-text="selectedDoc.docId"></span>
+                        </div>
+                        <h2 class="font-display font-bold text-xs md:text-sm text-slate-900  pt-1 truncate max-w-[280px] md:max-w-[450px]"
+                            x-text="selectedDoc.subject" :title="selectedDoc.subject"></h2>
+                    </div>
+                    <button @click="showDetailModal = false; selectedDoc = null;"
+                        class="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all"><i
+                            data-lucide="x" class="w-4 h-4"></i></button>
+                </div>
+
+                <!-- content body -->
+                <div class="flex-grow overflow-y-auto custom-scrollbar p-2 md:p-3 space-y-3">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+
+                        <!-- 左側：FSM 決策與附件 -->
+                        <div class="space-y-3">
+                            <!-- 附件檔案與簽章 -->
+                            <div
+                                class="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3.5 text-xs shadow-sm">
+                                <h3
+                                    class="font-bold text-slate-800 flex items-center gap-1.5 border-b border-slate-200 pb-2">
+                                    <i data-lucide="paperclip" class="w-3.5 h-3.5 text-indigo-600"></i>
+                                    <span x-text="selectedDoc.type + '現況'"></span>
+                                    <span
+                                        class="px-2 py-0.5 bg-indigo-100 border border-indigo-200 text-indigo-800 rounded font-mono font-bold"
+                                        x-text="selectedDoc.status"></span>
+                                </h3>
+
+                                <!-- 附件 -->
+                                <div class="group p-2.5 bg-white border border-slate-200 rounded-lg flex items-center justify-between shadow-sm transition-all duration-200"
+                                    :class="selectedDoc.fileId ? 'cursor-pointer hover:border-indigo-400 hover:bg-slate-50/50 hover:shadow-sm' : ''"
+                                    @click="if (selectedDoc.fileId && !selectedDoc.isUploadingAttachment) window.open('https://drive.google.com/file/d/' + selectedDoc.fileId + '/view', '_blank')">
+                                    <div class="flex items-center gap-2 min-w-0">
+                                        <i data-lucide="file-check" class="w-4 h-4 text-emerald-600 shrink-0"></i>
+                                        <div class="truncate">
+                                            <div class="flex items-center gap-1.5 min-w-0">
+                                                <span
+                                                    class="block text-[11px] font-bold text-slate-800 truncate max-w-[210px]"
+                                                    x-text="selectedDoc.isUploadingAttachment ? '正在上傳附件，請稍候...' : (selectedDoc.fileName || '尚未上傳檔案')"></span>
+                                                <!-- 淡淡浮現開啟新分頁圖示 -->
+                                                <i data-lucide="external-link"
+                                                    class="w-3.5 h-3.5 text-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity duration-200 shrink-0"
+                                                    :class="selectedDoc.fileId ? 'inline-block' : 'hidden'"></i>
+                                            </div>
+                                            <span class="text-[9px] text-slate-500 block"
+                                                x-text="selectedDoc.fileId ? '已儲存於雲端硬碟' : '可於決策流轉時上傳附件'"></span>
+                                        </div>
+                                    </div>
+
+                                    <!-- 整合型重新上傳按鈕 (位移向上完美整合，並停止 click 冒泡防禦任何與預覽 click 的衝突) -->
+                                    <template x-if="selectedDoc.fileId">
+                                        <div class="flex items-center gap-1.5 shrink-0" @click.stop>
+                                            <label class="cursor-pointer" @click.stop>
+                                                <input type="file" class="hidden" accept="application/pdf,.doc,.docx"
+                                                    @change="reuploadFile($event)">
+                                                <div :class="selectedDoc.isUploadingAttachment ? 'opacity-50 cursor-not-allowed bg-slate-100 text-slate-400 border-slate-200' : 'bg-indigo-50 hover:bg-indigo-600 text-indigo-700 hover:text-white border border-indigo-200'"
+                                                    class="px-2.5 py-1.5 rounded-lg border transition-all flex items-center gap-1 text-[10px] font-bold shadow-sm"
+                                                    title="重新上傳覆蓋附件">
+                                                    <template x-if="selectedDoc.isUploadingAttachment">
+                                                        <div class="flex items-center gap-1">
+                                                            <svg class="animate-spin h-3.5 w-3.5 text-indigo-600"
+                                                                xmlns="http://www.w3.org/2000/svg" fill="none"
+                                                                viewBox="0 0 24 24">
+                                                                <circle class="opacity-25" cx="12" cy="12" r="10"
+                                                                    stroke="currentColor" stroke-width="4"></circle>
+                                                                <path class="opacity-75" fill="currentColor"
+                                                                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
+                                                                </path>
+                                                            </svg>
+                                                            <span>替換中...</span>
+                                                        </div>
+                                                    </template>
+                                                    <template x-if="!selectedDoc.isUploadingAttachment">
+                                                        <div class="flex items-center gap-1">
+                                                            <i data-lucide="upload-cloud" class="w-3.5 h-3.5"></i>
+                                                            <span>重傳</span>
+                                                        </div>
+                                                    </template>
+                                                </div>
+                                            </label>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+
+                            <!-- FSM 動作推進區 -->
+                            <div
+                                class="bg-gradient-to-b from-white to-indigo-50/20 border border-indigo-200 p-4 rounded-xl space-y-3 shadow-sm ring-2 ring-indigo-500/5">
+                                <div class="flex items-center justify-between">
+                                    <div class="flex items-center gap-2 text-indigo-600">
+                                        <span class="relative flex h-2 w-2">
+                                            <span
+                                                class="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                                            <span
+                                                class="relative inline-flex rounded-full h-2 w-2 bg-indigo-600"></span>
+                                        </span>
+                                        <span class="font-bold text-[11px] tracking-wider uppercase text-indigo-800"
+                                            x-text="getAllowedRules().length > 0 ? 'Actions' : '流程已結束。'"></span>
+                                    </div>
+
+                                </div>
+
+                                <div class="flex flex-col gap-2 pt-1">
+                                    <template x-for="rule in getAllowedRules()" :key="rule.action">
+                                        <button @click="triggerFsmAction(rule)"
+                                            class="w-full px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-500 rounded-xl font-bold flex items-center justify-between transition-all text-xs shadow-md group">
+                                            <div class="flex items-center gap-2">
+                                                <i data-lucide="play"
+                                                    class="w-3.5 h-3.5 text-indigo-100 group-hover:scale-125 transition-transform"></i>
+                                                <span x-text="rule.action"></span>
+                                            </div>
+                                            <div
+                                                class="flex items-center gap-1 text-[10px] text-indigo-100 font-normal">
+                                                <span>推進至:</span>
+                                                <span
+                                                    class="px-1.5 py-0.2 bg-indigo-800 rounded border border-indigo-400/30 font-bold text-white"
+                                                    x-text="rule.nextStatus"></span>
+                                                <i data-lucide="chevron-right" class="w-3 h-3 text-white"></i>
+                                            </div>
+                                        </button>
+                                    </template>
+                                    <template x-if="getAllowedRules().length === 0">
+                                        <div
+                                            class="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-center text-[11px] font-semibold flex items-center justify-center gap-1.5">
+                                            <i data-lucide="check-circle" class="w-4 h-4 text-emerald-600"></i>
+                                            此案所有流程皆已完成。
+                                        </div>
+                                    </template>
+                                </div>
+
+                            </div>
+                        </div>
+
+                        <!-- 右側：基本屬性與移轉歷程 -->
+                        <div class="space-y-3">
+                            <!-- 公文基本屬性 -->
+                            <div class="bg-slate-50 border border-slate-200 p-3 rounded-xl space-y-2 text-xs shadow-sm">
+                                <div class="flex items-center justify-between border-b border-slate-200 pb-2">
+                                    <div class="flex items-center gap-1.5 text-indigo-700 font-bold">
+                                        <i data-lucide="bookmark" class="w-4 h-4 text-indigo-600"></i>
+                                        <span class="text-slate-800">案件</span>
+                                    </div>
+                                    <span class="font-mono text-[10px] text-slate-500"
+                                        x-text="'登記於 ' + selectedDoc.date"></span>
+                                </div>
+                                <div class="grid grid-cols-2 gap-x-4 gap-y-2.5 text-[11px]">
+                                    <div class="flex justify-between border-b border-slate-200 pb-1">
+                                        <span class="text-slate-500">對象</span>
+                                        <span class="font-bold text-slate-850"
+                                            x-text="selectedDoc.vendor || '未設定'"></span>
+                                    </div>
+                                    <div class="flex justify-between border-b border-slate-200 pb-1">
+                                        <span class="text-slate-500">截止</span>
+                                        <span class="font-bold text-rose-600"
+                                            x-text="selectedDoc.dueDate || '無限制'"></span>
+                                    </div>
+                                    <div class="flex justify-between border-b border-slate-200 pb-1">
+                                        <span class="text-slate-500">承辦</span>
+                                        <span class="font-bold text-slate-850"
+                                            x-text="selectedDoc.assignee || '未指派'"></span>
+                                    </div>
+                                    <div class="flex justify-between border-b border-slate-200 pb-1">
+                                        <span class="text-slate-500">分類</span>
+                                        <span class="font-bold text-slate-850" x-text="selectedDoc.tag || '未設定'"></span>
+                                    </div>
+
+                                </div>
+                                <!-- 關聯文件 -->
+                                <template x-if="selectedDoc.relatedDocId">
+                                    <div class="flex items-center justify-end text-[11px]">
+                                        <span x-text="selectedDoc.type === '發文' ? '來文連結 🔗' : '回文連結 🔗'"
+                                            class="text-slate-500 flex items-center gap-1">
+                                        </span>
+                                        <button @click="jumpToDocument(selectedDoc.relatedDocId)"
+                                            class="font-mono font-bold text-indigo-600 hover:underline hover:text-indigo-800"
+                                            x-text="selectedDoc.relatedDocId"></button>
+                                    </div>
+                                </template>
+
+                                <h3
+                                    class="font-bold text-xs text-slate-700 flex items-center gap-1.5 pt-2 border-t border-slate-150">
+                                    <i data-lucide="history" class="w-4 h-4 text-indigo-600"></i>
+                                    歷程 (Time line)
+                                </h3>
+
+                                <div
+                                    class="relative pl-6 pr-0.5 border-l border-slate-200 space-y-3 text-xs max-h-[200px] overflow-y-auto custom-scrollbar -mx-3 bg-white">
+                                    <template x-for="log in getDocLogs()" :key="log.order">
+                                        <div class="relative">
+                                            <!-- 時間軸圓點 -->
+                                            <span
+                                                :class="log.order === selectedDoc.order ? 'bg-indigo-600 ring-4 ring-indigo-100' : 'bg-slate-300'"
+                                                class="absolute -left-[24px] top-1 w-4 h-4 rounded-full border-2 border-white flex items-center justify-center text-[9px] font-mono text-white font-bold"
+                                                x-text="log.order"></span>
+
+                                            <!-- 歷程卡片 -->
+                                            <div
+                                                class="bg-slate-50 border border-slate-200 p-2.5 rounded-xl space-y-1 shadow-sm">
+                                                <div class="flex items-center justify-between">
+                                                    <span class="font-bold text-indigo-700" x-text="log.action"></span>
+                                                    <span class="text-[9px] text-slate-500 font-mono"
+                                                        x-text="log.date"></span>
+                                                </div>
+                                                <p class="text-slate-700 leading-normal text-[11px]"
+                                                    x-text="log.description"></p>
+
+                                                <div
+                                                    class="flex flex-wrap items-start justify-between text-[10px] text-slate-500 border-t border-slate-150 pt-1.5 mt-1">
+                                                    <div class="flex items-center gap-1">
+                                                        <span>文件狀態</span>
+                                                        <span
+                                                            class="px-1.5 py-0.2 bg-white text-slate-700 rounded font-semibold border border-slate-200"
+                                                            x-text="log.status"></span>
+                                                    </div>
+
+                                                    <div class="flex items-center gap-2.5">
+                                                        <!-- 歷程上傳附件 -->
+                                                        <template x-if="log.fileId">
+                                                            <a :href="'https://drive.google.com/file/d/' + log.fileId + '/view'"
+                                                                target="_blank"
+                                                                class="text-indigo-600 hover:underline flex items-center gap-0.5 font-bold">
+                                                                <i data-lucide="paperclip"
+                                                                    class="w-3 h-3 text-indigo-600"></i>
+                                                                [附件]
+                                                            </a>
+                                                        </template>
+
+                                                        <!-- 歷程手寫簽章 -->
+                                                        <template
+                                                            x-if="log.signatureFileId && flowConfigs.find(f => f.type === selectedDoc.type && f.action === log.action)?.reqSignature === '是'">
+                                                            <a :href="'https://drive.google.com/file/d/' + log.signatureFileId + '/view'"
+                                                                target="_blank"
+                                                                class="text-emerald-600 hover:underline flex items-start gap-0.5 font-bold">
+                                                                <i data-lucide="pen-tool"
+                                                                    class="w-3 h-3 text-emerald-600"></i>
+                                                                <div
+                                                                    class="bg-white rounded-lg p-1.5 border border-emerald-100 shrink-0 shadow-sm flex items-center justify-center">
+                                                                    <img :src="'https://lh3.googleusercontent.com/d/' + log.signatureFileId + '=s150'"
+                                                                        referrerPolicy="no-referrer"
+                                                                        class="h-10 w-auto object-contain bg-transparent mix-blend-darken"
+                                                                        alt="電子簽名">
+                                                                </div>
+                                                            </a>
+                                                        </template>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- footer action -->
+                <div
+                    class="px-5 py-1 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0 gap-2">
+                    <button @click="showDetailModal = false; selectedDoc = null;"
+                        class="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 font-semibold rounded-lg border border-slate-300 text-xs shadow-sm transition-all">
+                        關閉視窗
+                    </button>
+                </div>
+            </div>
+        </template>
+    </div>
+
+
+    <!-- Global Loading Overlay -->
+    <div x-show="loading" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0"
+        x-transition:enter-end="opacity-100" x-transition:leave="transition ease-in duration-150"
+        x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
+        class="fixed inset-0 bg-slate-900/45 backdrop-blur-sm flex flex-col items-center justify-center z-[9999]"
+        style="display: none;">
+        <div
+            class="p-5 bg-white border border-slate-150 rounded-2xl flex flex-col items-center gap-3 shadow-2xl max-w-xs text-center transform transition-all">
+            <!-- 採用純 SVG 搭配 CSS animate-spin，徹底防禦非同步與 JS 延遲載入產生的靜態未轉譯問題 -->
+            <svg class="animate-spin w-7 h-7 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none"
+                viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
+                <path class="opacity-75" fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
+                </path>
+            </svg>
+            <span class="text-[11px] font-bold text-slate-700 tracking-wide">資料讀寫同步中，請稍候...</span>
+        </div>
+    </div>
+
+
+    <!-- ==================== [ Alpine.js 核心邏輯引擎 ] ==================== -->
+    <script>
+        // Check for local dev environment
+        const isLocalEnvironment = typeof google === 'undefined' || !google.script || !google.script.run;
+
+        // Offline storage keys for Local Preview fallback
+        const LOCAL_STORAGE_MASTERS = "bisms_dispatch2_masters_v2";
+        const LOCAL_STORAGE_TRACKINGS = "bisms_dispatch2_trackings_v2";
+        const LOCAL_STORAGE_CONFIGS = "bisms_dispatch2_configs_v2";
+        const LOCAL_STORAGE_FLOW_CONFIGS = "bisms_dispatch2_flowConfigs_v2";
+
+        // Seed Default FSM Flow Config rows (English Mapped Keys)
+        const defaultFlowConfigs = [
+            { type: "收文", order: 1, phase: "1. 收件與登記", status: "待掃描", action: "收文簽收", nextStatus: "傳閱研判中", defaultDesc: "線上登記簽收，進入傳閱研判階段", reqFile: "是", reqDueDate: "3", reqSignature: "是" },
+            { type: "收文", order: 2, phase: "2. 傳閱與研判", status: "傳閱研判中", action: "存查結案", nextStatus: "已存查結案", defaultDesc: "研判無需回覆，直接存查歸檔", reqFile: "否", reqDueDate: "否", reqSignature: "否" },
+            { type: "收文", order: 2, phase: "2. 傳閱與研判", status: "傳閱研判中", action: "啟動回文", nextStatus: "待回覆辦理", defaultDesc: "研判需要編寫回文，自動啟動發文草稿", reqFile: "否", reqDueDate: "否", reqSignature: "否" },
+            { type: "收文", order: 3, phase: "3. 辦理與結案", status: "待回覆辦理", action: "回文送件", nextStatus: "已回覆結案", defaultDesc: "回文編寫完成並用印寄送，完成此案", reqFile: "是", reqDueDate: "否", reqSignature: "否" },
+
+            { type: "發文", order: 1, phase: "1. 草稿起草", status: "起草中", action: "送交審核", nextStatus: "審核中", defaultDesc: "完成起草發文，送交主管審查", reqFile: "是", reqDueDate: "否", reqSignature: "否" },
+            { type: "發文", order: 2, phase: "2. 主管審核", status: "審核中", action: "主管核准", nextStatus: "待用印", defaultDesc: "主管審核通過，送交印信與用印", reqFile: "否", reqDueDate: "否", reqSignature: "否" },
+            { type: "發文", order: 2, phase: "2. 主管審核", status: "審核中", action: "退回重寫", nextStatus: "起草中", defaultDesc: "主管審核不通過，退回重新撰寫與修改", reqFile: "否", reqDueDate: "否", reqSignature: "否" },
+            { type: "發文", order: 3, phase: "3. 用印與寄送", status: "待用印", action: "用印送件", nextStatus: "已送件", defaultDesc: "蓋用印信完畢，並寄送實體公文", reqFile: "是", reqDueDate: "3", reqSignature: "否" },
+            { type: "發文", order: 4, phase: "4. 外部簽收", status: "已送件", action: "對方簽收", nextStatus: "已簽收結案", defaultDesc: "對方代表簽收完成，本案正式結案", reqFile: "否", reqDueDate: "否", reqSignature: "is" }
+        ];
+
+        // Seed Default parameters (English Mapped Keys)
+        const defaultConfigs = [
+            { vendor: "中鼎工程", tag: "一般公文", prefix: "D", assignee: "工地經理", templateId: "1lidKUODsPWE5PKJbzNmk8Rr4tNp3-l_DTtqBDEg-x3U" },
+            { vendor: "勞動局", tag: "安全檢查", prefix: "S", assignee: "公安組長", templateId: "" },
+            { vendor: "台電", tag: "採購招標", prefix: "P", assignee: "專案經理", templateId: "" }
+        ];
+
+        // Seed Default document masters (English Mapped Keys)
+        const defaultMasters = [
+            { docId: "D115070401", date: "2026-07-04", type: "收文", vendor: "中鼎工程", tag: "一般公文", subject: "關於林口電廠鍋爐安裝工程檢驗計畫書審查意見", assignee: "工地經理", order: 1, lastAction: "建立公文", status: "待掃描", fileName: "林口檢驗計畫書審查意見.pdf", fileId: "mock_file_001", signatureFileId: "", relatedDocId: "", dueDate: "2026-07-07" },
+            { docId: "S115070402", date: "2026-07-04", type: "發文", vendor: "勞動局", tag: "安全檢查", subject: "檢送林口起重吊裝作業安全自主檢核表與照片", assignee: "公安組長", order: 2, lastAction: "送交審核", status: "審核中", fileName: "起重吊裝安全檢核表.pdf", fileId: "mock_file_002", signatureFileId: "", relatedDocId: "", dueDate: "" }
+        ];
+
+        const defaultTrackings = [
+            { docId: "D115070401", order: 1, date: "2026-07-04", action: "建立公文", description: "收文登記，等待現場簽收", dueDate: "2026-07-07", status: "待掃描", fileName: "林口檢驗計畫書審查意見.pdf", fileId: "mock_file_001", signatureFileId: "" },
+            { docId: "S115070402", order: 1, date: "2026-07-04", action: "建立公文", description: "公文草案初建，指派公安組長主辦", dueDate: "", status: "起草中", fileName: "", fileId: "", signatureFileId: "" },
+            { docId: "S115070402", order: 2, date: "2026-07-04", action: "送交審核", description: "已上傳最終吊裝檢核照片與報告，送交主管審查", dueDate: "", status: "審核中", fileName: "起重吊裝安全檢核表.pdf", fileId: "mock_file_002", signatureFileId: "" }
+        ];
+
+        // Fallback Mock API Handler for Local Environment
+        function mockApiHandler(method, payload) {
+            let masters = JSON.parse(localStorage.getItem(LOCAL_STORAGE_MASTERS)) || defaultMasters;
+            let trackings = JSON.parse(localStorage.getItem(LOCAL_STORAGE_TRACKINGS)) || defaultTrackings;
+            let configs = JSON.parse(localStorage.getItem(LOCAL_STORAGE_CONFIGS)) || defaultConfigs;
+            let flowConfigs = JSON.parse(localStorage.getItem(LOCAL_STORAGE_FLOW_CONFIGS)) || defaultFlowConfigs;
+
+            switch (method) {
+                case "getInitialData":
+                    return { success: true, version: "v2.5.0-Mock", masters, trackings, configs, flowConfigs, webAppUrl: "#" };
+
+                case "createDocument":
+                    const docId = payload.docId;
+                    if (masters.some(m => m.docId === docId)) {
+                        throw new Error("文號已存在");
+                    }
+                    const newDoc = {
+                        docId: docId,
+                        date: payload.date || "2026-07-04",
+                        type: payload.type || "收文",
+                        vendor: payload.vendor || "",
+                        tag: payload.category || "",
+                        subject: payload.subject || "",
+                        assignee: payload.assignee || "",
+                        order: 1,
+                        lastAction: payload.initAction || "登記文件",
+                        status: payload.initStatus || "待掃描",
+                        fileName: payload.fileName || "",
+                        fileId: payload.fileBase64 ? "mock_file_" + Date.now() : "",
+                        signatureFileId: payload.signatureFileId || "",
+                        relatedDocId: payload.relatedDocId || "",
+                        dueDate: payload.dueDate || ""
+                    };
+                    masters.push(newDoc);
+                    localStorage.setItem(LOCAL_STORAGE_MASTERS, JSON.stringify(masters));
+
+                    trackings.push({
+                        docId: docId,
+                        order: 1,
+                        date: payload.date || "",
+                        action: payload.initAction || "登記文件",
+                        description: payload.initDesc || "完成登記",
+                        dueDate: payload.dueDate || "",
+                        status: payload.initStatus || "待掃描",
+                        fileName: payload.fileName || "",
+                        fileId: newDoc.fileId,
+                        signatureFileId: payload.signatureFileId || ""
+                    });
+                    localStorage.setItem(LOCAL_STORAGE_TRACKINGS, JSON.stringify(trackings));
+                    return { success: true, message: `文號 ${docId} 建立成功` };
+
+                case "addTrackingRecord":
+                    const trDocId = payload.docId;
+                    const matchedDoc = masters.find(m => m.docId === trDocId);
+                    if (!matchedDoc) throw new Error("文號不存在");
+
+                    const nextOrder = trackings.filter(t => t.docId === trDocId).length + 1;
+                    const logFileId = payload.fileBase64 ? "mock_file_" + Date.now() : "";
+                    const logFileName = payload.fileBase64 ? (payload.fileName || "歷程附件.pdf") : "";
+
+                    // Update Master
+                    matchedDoc.order = nextOrder;
+                    matchedDoc.lastAction = payload.action;
+                    matchedDoc.status = payload.status;
+                    if (logFileId) {
+                        matchedDoc.fileName = logFileName;
+                        matchedDoc.fileId = logFileId;
+                    }
+                    if (payload.signatureFileId) {
+                        matchedDoc.signatureFileId = payload.signatureFileId;
+                    }
+                    if (payload.dueDate) {
+                        matchedDoc.dueDate = payload.dueDate;
+                    }
+                    localStorage.setItem(LOCAL_STORAGE_MASTERS, JSON.stringify(masters));
+
+                    // Append Tracking
+                    trackings.push({
+                        docId: trDocId,
+                        order: nextOrder,
+                        date: payload.date || "",
+                        action: payload.action,
+                        description: payload.description || "",
+                        dueDate: payload.dueDate || "",
+                        status: payload.status,
+                        fileName: logFileName,
+                        fileId: logFileId,
+                        signatureFileId: payload.signatureFileId || ""
+                    });
+
+                    let msg = `文件 ${trDocId} 狀態已成功流轉至 [${payload.status}]`;
+
+                    if (payload.action === "啟動回文") {
+                        const newDocId = trDocId + "_回";
+                        if (!masters.some(m => m.docId === newDocId)) {
+                            masters.push({
+                                docId: newDocId,
+                                date: "2026-07-04",
+                                type: "發文",
+                                vendor: matchedDoc.vendor,
+                                tag: "回文",
+                                subject: "回覆：" + matchedDoc.subject,
+                                assignee: matchedDoc.assignee,
+                                order: 1,
+                                lastAction: "起草中",
+                                status: "起草中",
+                                fileName: "",
+                                fileId: "",
+                                signatureFileId: "",
+                                relatedDocId: trDocId,
+                                dueDate: ""
+                            });
+                            trackings.push({
+                                docId: newDocId,
+                                order: 1,
+                                date: "2026-07-04",
+                                action: "起草中",
+                                description: `針對收文案號 ${trDocId} 自動連鎖起草回文發文案`,
+                                dueDate: "",
+                                status: "起草中",
+                                fileName: "",
+                                fileId: "",
+                                signatureFileId: ""
+                            });
+                            matchedDoc.relatedDocId = newDocId;
+                            localStorage.setItem(LOCAL_STORAGE_MASTERS, JSON.stringify(masters));
+                            msg += `，且系統已自動建立關聯發文起草案 (文號：${newDocId})`;
+                        }
+                    }
+
+                    localStorage.setItem(LOCAL_STORAGE_TRACKINGS, JSON.stringify(trackings));
+                    return { success: true, fileId: logFileId, fileName: logFileName, message: msg };
+
+                case "saveSystemConfig":
+                    localStorage.setItem(LOCAL_STORAGE_CONFIGS, JSON.stringify(payload));
+                    return { success: true, message: "系統常規設定儲存成功" };
+
+                case "saveFlowConfig":
+                    localStorage.setItem(LOCAL_STORAGE_FLOW_CONFIGS, JSON.stringify(payload));
+                    return { success: true, message: "流程配置儲存成功" };
+
+                case "uploadSignature":
+                    return { success: true, fileId: "mock_sig_" + Date.now(), message: "手寫簽章錄入成功" };
+
+                case "getNextDocId":
+                    const category = payload.category || "";
+                    const matchedConf = configs.find(c => c.tag === category);
+                    const prefix = matchedConf ? (matchedConf.prefix || "") : "";
+                    const datePart = "1150704";
+
+                    let maxSeq = 0;
+                    masters.forEach(d => {
+                        const idStr = String(d.docId).trim();
+                        let rawId = idStr;
+                        if (prefix && idStr.startsWith(prefix)) {
+                            rawId = idStr.substring(prefix.length);
+                        }
+                        if (rawId.startsWith(datePart) && rawId.length === datePart.length + 2) {
+                            const seqStr = rawId.substring(datePart.length);
+                            const seq = parseInt(seqStr, 10);
+                            if (!isNaN(seq) && seq > maxSeq) {
+                                maxSeq = seq;
+                            }
+                        }
+                    });
+                    const nextSeq = maxSeq + 1;
+                    const seqStr = ("0" + nextSeq).slice(-2);
+                    return { success: true, docId: prefix + datePart + seqStr };
+
+                case "initializeSheets":
+                    localStorage.setItem(LOCAL_STORAGE_MASTERS, JSON.stringify(defaultMasters));
+                    localStorage.setItem(LOCAL_STORAGE_TRACKINGS, JSON.stringify(defaultTrackings));
+                    localStorage.setItem(LOCAL_STORAGE_CONFIGS, JSON.stringify(defaultConfigs));
+                    localStorage.setItem(LOCAL_STORAGE_FLOW_CONFIGS, JSON.stringify(defaultFlowConfigs));
+                    return { success: true, message: "已重設為系統預設" };
+
+                case "copyTemplateFile":
+                    return { success: true, fileId: "mock_copied_temp", fileName: "D115070401-合約範本.docx", message: "範本套用成功" };
+
+                case "deleteTemplateFile":
+                    return { success: true, message: "複本檔案刪除成功" };
+
+                default:
+                    return { success: false, message: "未支援 Mock API" };
+            }
+        }
+
+        // Alpine 核心邏輯
+        function bismsApp() {
+            return {
+                currentTab: 'docs',
+                loading: false,
+                saving: false,
+                isLocalMock: isLocalEnvironment,
+                webAppUrl: '',
+
+                // Mapped lists
+                masters: [],
+                trackings: [],
+                configs: [],
+                flowConfigs: [],
+
+                selectedDoc: null,
+                showDetailModal: false,
+                isPortrait: (window.innerHeight > window.innerWidth) && window.matchMedia("(pointer: coarse)").matches,
+                hasSigned: false,
+                dashboardFilter: 'all',
+                showMobileFilters: false,
+
+                filters: {
+                    type: 'all',
+                    status: 'all',
+                    vendor: 'all',
+                    category: 'all',
+                    search: ''
+                },
+
+                isClosed(item) {
+                    if (!item || !item.status) return false;
+                    return item.status.includes('結案') || item.status === '已結案';
+                },
+
+                isOverdue(item) {
+                    if (!item || !item.dueDate || this.isClosed(item)) return false;
+                    return item.dueDate < this.getTodayStr();
+                },
+
+                isInProgress(item) {
+                    if (!item) return false;
+                    return !this.isClosed(item) && !this.isOverdue(item);
+                },
+
+                getTodayStr() {
+                    const d = new Date();
+                    const y = d.getFullYear();
+                    const m = ("0" + (d.getMonth() + 1)).slice(-2);
+                    const day = ("0" + d.getDate()).slice(-2);
+                    return `${y}-${m}-${day}`;
+                },
+
+                // 樂觀更新排隊鎖防護 (Version Lock Map)
+                versionLockMap: {},
+
+                // Modals
+                showCreateModal: false,
+                showActionModal: false,
+                showSignaturePanel: false,
+                showConfigEditModal: false,
+                configEditIndex: null,
+                showFlowEditModal: false,
+                flowEditIndex: null,
+
+                // Config and Flow Modal Forms
+                configForm: {
+                    vendor: "",
+                    tag: "",
+                    prefix: "",
+                    assignee: "",
+                    templateId: ""
+                },
+                flowForm: {
+                    type: "收文",
+                    order: 1,
+                    phase: "",
+                    status: "",
+                    action: "",
+                    nextStatus: "",
+                    defaultDesc: "",
+                    reqFile: "否",
+                    reqDueDate: "否",
+                    reqSignature: "否"
+                },
+
+                // Forms
+                newDocForm: {
+                    type: '收文',
+                    vendor: '',
+                    category: '',
+                    docId: '',
+                    subject: '',
+                    assignee: '',
+                    dueDate: '',
+                    fileBase64: '',
+                    fileName: ''
+                },
+
+                activeFlowRule: null, // 被點選的關卡規則
+                transitionForm: {
+                    description: '',
+                    dueDate: '',
+                    fileBase64: '',
+                    fileName: '',
+                    signatureBase64: ''
+                },
+
+                // Canvas親筆簽名
+                sigCanvas: null,
+                sigCtx: null,
+                isDrawing: false,
+
+                // 初始化啟動
+                init() {
+                    this.refreshData();
+
+                    // 提前詢問 GAS 外部 URL 與參數，並快取 parentUrl
+                    if (typeof google !== 'undefined' && google.script && google.script.url) {
+                        try {
+                            google.script.url.getLocation((location) => {
+                                const parentUrlFromGas = location.parameter && location.parameter.parentUrl;
+                                if (parentUrlFromGas) {
+                                    localStorage.setItem('bisms_parent_url', parentUrlFromGas);
+                                }
+                            });
+                        } catch (e) {
+                            console.warn("GAS init getLocation error:", e);
+                        }
+                    }
+
+                    // 監聽鍵盤 Escape 鍵快速關閉 Modal 
+                    window.addEventListener('keydown', (e) => {
+                        if (e.key === 'Escape') {
+                            this.showCreateModal = false;
+                            this.showActionModal = false;
+                            this.showSignaturePanel = false;
+                            this.showDetailModal = false;
+                            this.showConfigEditModal = false;
+                            this.showFlowEditModal = false;
+                        }
+                    });
+
+                    // 監聽螢幕旋轉與大小變化，動態調整直式/橫式佈局與電子簽名板
+                    window.addEventListener('resize', () => {
+                        this.isPortrait = (window.innerHeight > window.innerWidth) && window.matchMedia("(pointer: coarse)").matches;
+                        if (this.showSignaturePanel) {
+                            this.$nextTick(() => { this.initSignatureCanvas(); });
+                        }
+                    });
+                    window.addEventListener('orientationchange', () => {
+                        setTimeout(() => {
+                            this.isPortrait = (window.innerHeight > window.innerWidth) && window.matchMedia("(pointer: coarse)").matches;
+                            if (this.showSignaturePanel) {
+                                this.initSignatureCanvas();
+                            }
+                        }, 200);
+                    });
+                },
+
+                // 核心後端調用 API
+                async api(method, payload = null) {
+                    if (this.isLocalMock) {
+                        return new Promise((resolve) => {
+                            setTimeout(() => {
+                                try {
+                                    resolve(mockApiHandler(method, payload));
+                                } catch (e) {
+                                    resolve({ success: false, message: e.message });
+                                }
+                            }, 500);
+                        });
+                    }
+
+                    return new Promise((resolve) => {
+                        google.script.run
+                            .withSuccessHandler((res) => resolve(res))
+                            .withFailureHandler((err) => resolve({ success: false, message: err.toString() }))
+                            .api(method, payload);
+                    });
+                },
+
+                // 系統重整載入
+                refreshData(silent = false) {
+                    if (!silent) {
+                        this.loading = true;
+                    }
+                    this.api("getInitialData")
+                        .then((res) => {
+                            if (!silent) {
+                                this.loading = false;
+                            }
+                            if (res && res.success) {
+                                this.masters = res.masters || [];
+                                this.trackings = res.trackings || [];
+                                this.configs = res.configs || [];
+                                this.flowConfigs = res.flowConfigs || [];
+                                this.webAppUrl = res.webAppUrl || "";
+
+                                // 解析 URL 參數並自動載入對應公文
+                                let qDocId = "";
+                                try {
+                                    const params = new URLSearchParams(window.location.search);
+                                    qDocId = params.get('docId') || params.get('id') || "";
+                                } catch (e) { }
+
+                                if (qDocId) {
+                                    const matched = this.masters.find(m => m.docId === qDocId);
+                                    if (matched) {
+                                        this.selectedDoc = matched;
+                                        this.showDetailModal = true;
+                                    }
+                                } else if (typeof google !== 'undefined' && google.script && google.script.url) {
+                                    try {
+                                        google.script.url.getLocation((location) => {
+                                            const docIdFromGas = location.parameter && (location.parameter.docId || location.parameter.id);
+                                            const parentUrlFromGas = location.parameter && location.parameter.parentUrl;
+                                            if (parentUrlFromGas) {
+                                                localStorage.setItem('bisms_parent_url', parentUrlFromGas);
+                                            }
+                                            if (docIdFromGas) {
+                                                const matched = this.masters.find(m => m.docId === docIdFromGas);
+                                                if (matched) {
+                                                    this.selectedDoc = matched;
+                                                    this.showDetailModal = true;
+                                                    this.$nextTick(() => {
+                                                        lucide.createIcons();
+                                                    });
+                                                }
+                                            }
+                                        });
+                                    } catch (err) {
+                                        console.warn("GAS getLocation error:", err);
+                                    }
+                                } else if (this.selectedDoc) {
+                                    const refreshed = this.masters.find(m => m.docId === this.selectedDoc.docId);
+                                    this.selectedDoc = refreshed ? refreshed : null;
+                                    if (!this.selectedDoc) {
+                                        this.showDetailModal = false;
+                                    }
+                                }
+
+                                this.$nextTick(() => {
+                                    lucide.createIcons();
+                                });
+                            } else {
+                                if (!silent) {
+                                    this.showToast("資料庫同步失敗：" + (res ? res.message : "未知錯誤"), 'error');
+                                }
+                            }
+                        })
+                        .catch((err) => {
+                            if (!silent) {
+                                this.loading = false;
+                                this.showToast("連線至資料庫失敗: " + err, 'error');
+                            }
+                        });
+                },
+
+                // 取得對應篩選後的 Master 列表
+                get filteredMasters() {
+                    return this.masters.filter(item => {
+                        // 1. 搜尋字
+                        if (this.filters.search) {
+                            const query = this.filters.search.toLowerCase().trim();
+                            const docIdMatch = String(item.docId).toLowerCase().includes(query);
+                            const subjectMatch = String(item.subject).toLowerCase().includes(query);
+                            if (!docIdMatch && !subjectMatch) return false;
+                        }
+                        // 2. 分類類型
+                        if (this.filters.type !== 'all' && item.type !== this.filters.type) {
+                            return false;
+                        }
+                        // 3. 目前狀態
+                        if (this.filters.status !== 'all' && item.status !== this.filters.status) {
+                            return false;
+                        }
+                        // 3.5 往來對象
+                        if (this.filters.vendor !== 'all' && item.vendor !== this.filters.vendor) {
+                            return false;
+                        }
+                        // 3.6 分類標籤
+                        if (this.filters.category !== 'all' && item.tag !== this.filters.category) {
+                            return false;
+                        }
+                        // 4. Dashboard 快速篩選
+                        if (this.dashboardFilter === 'inProgress') {
+                            if (!this.isInProgress(item)) return false;
+                        } else if (this.dashboardFilter === 'overdue') {
+                            if (!this.isOverdue(item)) return false;
+                        } else if (this.dashboardFilter === 'closed') {
+                            if (!this.isClosed(item)) return false;
+                        }
+                        return true;
+                    });
+                },
+
+                getUniqueStatuses() {
+                    const st = new Set();
+                    this.masters.forEach(m => {
+                        if (m.status) st.add(m.status);
+                    });
+                    return Array.from(st);
+                },
+
+                getUniqueVendors() {
+                    const v = new Set();
+                    this.configs.forEach(c => {
+                        if (c.vendor) v.add(c.vendor);
+                    });
+                    return Array.from(v);
+                },
+
+                getUniqueCategories() {
+                    const cat = new Set();
+                    this.configs.forEach(c => {
+                        if (c.tag) cat.add(c.tag);
+                    });
+                    return Array.from(cat);
+                },
+
+                // 選擇並檢視特定公文案
+                selectDocument(doc) {
+                    this.selectedDoc = doc;
+                    this.showDetailModal = true;
+                    this.$nextTick(() => {
+                        lucide.createIcons();
+                    });
+                },
+
+                // 複製公文的網址連結並選取/彈出決策視窗
+                copyDocumentLink(doc) {
+                    // 1. 選擇公文並顯示彈窗
+                    this.selectDocument(doc);
+
+                    // 2. 獲取 GitPages 外部連結
+                    let parentUrl = "";
+                    try {
+                        const urlParams = new URLSearchParams(window.location.search);
+                        parentUrl = urlParams.get('parentUrl');
+                        if (parentUrl) {
+                            localStorage.setItem('bisms_parent_url', parentUrl);
+                        }
+                    } catch (e) { }
+
+                    if (!parentUrl) {
+                        parentUrl = localStorage.getItem('bisms_parent_url') || "";
+                    }
+
+                    let shareUrl = "";
+                    if (parentUrl) {
+                        try {
+                            const urlObj = new URL(parentUrl);
+                            urlObj.searchParams.set('docId', doc.docId);
+                            shareUrl = urlObj.toString();
+                        } catch (e) {
+                            shareUrl = parentUrl + (parentUrl.includes('?') ? '&' : '?') + "docId=" + encodeURIComponent(doc.docId);
+                        }
+                    } else if (this.webAppUrl && this.webAppUrl !== "#" && this.webAppUrl !== "") {
+                        // 使用 GAS Web App 公開部署網址作為最優備用，避免產生無效的沙盒網址
+                        try {
+                            const urlObj = new URL(this.webAppUrl);
+                            urlObj.searchParams.set('docId', doc.docId);
+                            shareUrl = urlObj.toString();
+                        } catch (e) {
+                            shareUrl = this.webAppUrl + (this.webAppUrl.includes('?') ? '&' : '?') + "docId=" + encodeURIComponent(doc.docId);
+                        }
+                    } else {
+                        // 最後備用：當前網頁網址 (僅在沒有 parentUrl 與 webAppUrl 時，通常是本地開發測試環境)
+                        try {
+                            const urlObj = new URL(window.location.href);
+                            urlObj.searchParams.set('docId', doc.docId);
+                            shareUrl = urlObj.toString();
+                        } catch (e) {
+                            shareUrl = window.location.href + (window.location.href.includes('?') ? '&' : '?') + "docId=" + encodeURIComponent(doc.docId);
+                        }
+                    }
+
+                    // 3. 複製到剪貼簿
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(shareUrl)
+                            .then(() => {
+                                this.showToast(`✓ 已複製連結！案號: ${doc.docId}`);
+                            })
+                            .catch(err => {
+                                console.error('無法複製連結', err);
+                                this.fallbackCopyText(shareUrl, doc.docId);
+                            });
+                    } else {
+                        this.fallbackCopyText(shareUrl, doc.docId);
+                    }
+                },
+
+                fallbackCopyText(text, docId) {
+                    const textArea = document.createElement("textarea");
+                    textArea.value = text;
+                    textArea.style.position = "fixed";  // 避免滾動
+                    document.body.appendChild(textArea);
+                    textArea.focus();
+                    textArea.select();
+                    try {
+                        const successful = document.execCommand('copy');
+                        if (successful) {
+                            this.showToast(`✓ 已複製連結！案號: ${docId}`);
+                        } else {
+                            this.showToast('無法複製連結，請手動複製', 'error');
+                        }
+                    } catch (err) {
+                        this.showToast('無法複製連結，請手動複製', 'error');
+                    }
+                    document.body.removeChild(textArea);
+                },
+
+                jumpToDocument(docId) {
+                    const target = this.masters.find(m => m.docId === docId);
+                    if (target) {
+                        this.selectDocument(target);
+                    } else {
+                        this.showToast(`無法跳轉，找不到關聯案號 ${docId}`, 'error');
+                    }
+                },
+
+                getDocLogs() {
+                    if (!this.selectedDoc) return [];
+                    return this.trackings
+                        .filter(t => t.docId === this.selectedDoc.docId)
+                        .sort((a, b) => Number(a.order) - Number(b.order));
+                },
+
+                // FSM 決策機：篩選符合此公文當前狀態的「允許動作」
+                getAllowedRules() {
+                    if (!this.selectedDoc) return [];
+                    return this.flowConfigs.filter(f =>
+                        f.type === this.selectedDoc.type &&
+                        f.status === this.selectedDoc.status
+                    );
+                },
+
+                reuploadFile(e) {
+                    const file = e.target.files[0];
+                    if (!file) return;
+
+                    // 樂觀更新 / 局部載入 狀態
+                    if (this.selectedDoc) {
+                        this.selectedDoc.isUploadingAttachment = true;
+                    }
+
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        const base64Data = event.target.result;
+                        const payload = {
+                            docId: this.selectedDoc.docId,
+                            fileName: file.name,
+                            base64Data: base64Data,
+                            oldFileId: this.selectedDoc.fileId || ""
+                        };
+
+                        this.api("uploadAttachment", payload)
+                            .then(res => {
+                                if (this.selectedDoc) {
+                                    this.selectedDoc.isUploadingAttachment = false;
+                                }
+                                if (res.success) {
+                                    this.showToast(res.message || "附件上傳成功");
+
+                                    // [樂觀更新 (Optimistic UI) 暫存區]
+                                    const fileId = res.fileId;
+                                    const fileName = res.fileName;
+
+                                    // 1. 同步更新 selectedDoc
+                                    if (this.selectedDoc) {
+                                        this.selectedDoc.fileId = fileId;
+                                        this.selectedDoc.fileName = fileName;
+                                    }
+
+                                    // 2. 同步更新 masters 對應之項目
+                                    const master = this.masters.find(m => m.docId === this.selectedDoc.docId);
+                                    if (master) {
+                                        master.fileId = fileId;
+                                        master.fileName = fileName;
+                                    }
+
+                                    // 3. 同步更新 trackings 對應之最末筆歷程
+                                    const docTrackings = this.trackings.filter(t => t.docId === this.selectedDoc.docId);
+                                    if (docTrackings.length > 0) {
+                                        let maxTrack = docTrackings[0];
+                                        docTrackings.forEach(t => {
+                                            if (t.order > maxTrack.order) maxTrack = t;
+                                        });
+                                        maxTrack.fileId = fileId;
+                                        maxTrack.fileName = fileName;
+                                    }
+
+                                    this.$nextTick(() => {
+                                        lucide.createIcons();
+                                    });
+
+                                    // 後端靜默同步
+                                    this.refreshData(true);
+                                } else {
+                                    this.showToast("上傳失敗: " + res.message, 'error');
+                                }
+                            })
+                            .catch(err => {
+                                if (this.selectedDoc) {
+                                    this.selectedDoc.isUploadingAttachment = false;
+                                }
+                                this.showToast("連線伺服器失敗: " + err, 'error');
+                            });
+                    };
+                    reader.readAsDataURL(file);
+                },
+
+                // 開啟建立登記彈窗
+                openCreateModal() {
+                    this.newDocForm = {
+                        type: '收文',
+                        vendor: '',
+                        category: '',
+                        docId: '',
+                        subject: '',
+                        assignee: '',
+                        dueDate: '',
+                        fileBase64: '',
+                        fileName: ''
+                    };
+                    this.showCreateModal = true;
+                    this.updateFormNextDocId();
+                },
+
+                onFormVendorChange() {
+                    // 自動帶入負責承辦人
+                    const conf = this.configs.find(c => c.vendor === this.newDocForm.vendor && c.tag === this.newDocForm.category);
+                    if (conf && conf.assignee) {
+                        this.newDocForm.assignee = conf.assignee;
+                    }
+                    this.updateFormNextDocId();
+                },
+
+                // 呼叫後端依據字軌與日期生成唯一公文案號
+                updateFormNextDocId() {
+                    const today = new Date();
+                    const y = today.getFullYear();
+                    const m = ("0" + (today.getMonth() + 1)).slice(-2);
+                    const d = ("0" + today.getDate()).slice(-2);
+                    const dateStr = `${y}-${m}-${d}`;
+
+                    this.api("getNextDocId", {
+                        category: this.newDocForm.category,
+                        date: dateStr
+                    }).then(res => {
+                        if (res.success) {
+                            this.newDocForm.docId = res.docId;
+                        }
+                    });
+                },
+
+                handleFormFileChange(e) {
+                    const file = e.target.files[0];
+                    if (!file) return;
+
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        this.newDocForm.fileBase64 = event.target.result;
+                        this.newDocForm.fileName = file.name;
+                    };
+                    reader.readAsDataURL(file);
+                },
+
+                // 提交初建公文
+                submitCreateDocument() {
+                    this.loading = true;
+                    const payload = {
+                        docId: this.newDocForm.docId,
+                        type: this.newDocForm.type,
+                        vendor: this.newDocForm.vendor,
+                        category: this.newDocForm.category,
+                        subject: this.newDocForm.subject,
+                        assignee: this.newDocForm.assignee,
+                        dueDate: this.newDocForm.dueDate,
+                        initStatus: this.newDocForm.type === '收文' ? '待掃描' : '起草中',
+                        initAction: '登記文件',
+                        initDesc: this.newDocForm.type === '收文' ? '收文已登記，待掃描文件' : '發文草稿初建完成，等待推進至送審階段',
+                        fileBase64: this.newDocForm.fileBase64,
+                        fileName: this.newDocForm.fileName
+                    };
+
+                    this.api("createDocument", payload)
+                        .then(res => {
+                            this.loading = false;
+                            if (res.success) {
+                                this.showCreateModal = false;
+                                this.showToast(res.message);
+                                this.refreshData();
+                            } else {
+                                this.showToast("登記文件失敗：" + res.message, 'error');
+                            }
+                        })
+                        .catch(err => {
+                            this.loading = false;
+                            this.showToast("登記文件連線失敗: " + err, 'error');
+                        });
+                },
+
+                // 點選推進按鈕，開啟決策彈窗
+                triggerFsmAction(rule) {
+                    this.activeFlowRule = rule;
+
+                    let defDueDate = '';
+                    if (rule.reqDueDate && rule.reqDueDate !== '否') {
+                        const days = parseInt(rule.reqDueDate, 10);
+                        if (!isNaN(days)) {
+                            defDueDate = this.addDaysToToday(days);
+                        }
+                    }
+
+                    this.transitionForm = {
+                        description: rule.defaultDesc || '',
+                        dueDate: defDueDate,
+                        fileBase64: '',
+                        fileName: '',
+                        signatureBase64: ''
+                    };
+
+                    this.showActionModal = true;
+                },
+
+                addDaysToToday(days) {
+                    const d = new Date();
+                    d.setDate(d.getDate() + days);
+                    const y = d.getFullYear();
+                    const m = ("0" + (d.getMonth() + 1)).slice(-2);
+                    const day = ("0" + d.getDate()).slice(-2);
+                    return `${y}-${m}-${day}`;
+                },
+
+                handleTransitionFileChange(e) {
+                    const file = e.target.files[0];
+                    if (!file) return;
+
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        this.transitionForm.fileBase64 = event.target.result;
+                        this.transitionForm.fileName = file.name;
+                    };
+                    reader.readAsDataURL(file);
+                },
+
+                // 提交 FSM 移轉決策
+                async submitFsmTransition() {
+                    const rule = this.activeFlowRule;
+                    if (!rule) return;
+
+                    // 1. 強制檢查簽名
+                    if (rule.reqSignature === '是' && !this.transitionForm.signatureBase64) {
+                        this.showToast("此關卡必須簽核，請先錄入您的親筆電子簽章！", 'error');
+                        return;
+                    }
+
+                    this.loading = true;
+
+                    // 2. 若錄入了數位簽名，先上傳簽名
+                    let signatureFileId = "";
+                    try {
+                        if (this.transitionForm.signatureBase64) {
+                            const sigRes = await this.api("uploadSignature", {
+                                docId: this.selectedDoc.docId,
+                                base64Data: this.transitionForm.signatureBase64,
+                                action: rule.action
+                            });
+                            if (sigRes && sigRes.success) {
+                                signatureFileId = sigRes.fileId;
+                            } else {
+                                this.loading = false;
+                                this.showToast("上傳電子簽章失敗：" + (sigRes ? sigRes.message : ""), 'error');
+                                return;
+                            }
+                        }
+
+                        // 3. 推進狀態
+                        const payload = {
+                            docId: this.selectedDoc.docId,
+                            action: rule.action,
+                            status: rule.nextStatus,
+                            description: this.transitionForm.description,
+                            dueDate: this.transitionForm.dueDate,
+                            fileBase64: this.transitionForm.fileBase64,
+                            fileName: this.transitionForm.fileName,
+                            signatureFileId: signatureFileId
+                        };
+
+                        this.api("addTrackingRecord", payload)
+                            .then(res => {
+                                this.loading = false;
+                                if (res.success) {
+                                    this.showActionModal = false;
+                                    this.showToast(res.message);
+
+                                    // ==================== [樂觀更新 (Optimistic UI)] ====================
+                                    const fileId = res.fileId || "";
+                                    const fileName = res.fileName || (payload.fileBase64 ? payload.fileName : "");
+                                    const currentOrder = this.trackings.filter(t => t.docId === this.selectedDoc.docId).length + 1;
+
+                                    // 構造新的歷程
+                                    const newLog = {
+                                        docId: payload.docId,
+                                        order: currentOrder,
+                                        date: new Date().toISOString().split('T')[0],
+                                        action: payload.action,
+                                        description: payload.description || "",
+                                        dueDate: payload.dueDate || "",
+                                        status: payload.status,
+                                        fileName: fileName,
+                                        fileId: fileId,
+                                        signatureFileId: signatureFileId || ""
+                                    };
+
+                                    // 同步更新當前選定之公文 (selectedDoc) 與 masters 陣列中的項目
+                                    if (this.selectedDoc) {
+                                        this.selectedDoc.order = currentOrder;
+                                        this.selectedDoc.lastAction = payload.action;
+                                        this.selectedDoc.status = payload.status;
+                                        if (fileId) {
+                                            this.selectedDoc.fileName = fileName;
+                                            this.selectedDoc.fileId = fileId;
+                                        }
+                                        if (signatureFileId) {
+                                            this.selectedDoc.signatureFileId = signatureFileId;
+                                        }
+                                        if (payload.dueDate) {
+                                            this.selectedDoc.dueDate = payload.dueDate;
+                                        }
+                                    }
+
+                                    const master = this.masters.find(m => m.docId === payload.docId);
+                                    if (master) {
+                                        master.order = currentOrder;
+                                        master.lastAction = payload.action;
+                                        master.status = payload.status;
+                                        if (fileId) {
+                                            master.fileName = fileName;
+                                            master.fileId = fileId;
+                                        }
+                                        if (signatureFileId) {
+                                            master.signatureFileId = signatureFileId;
+                                        }
+                                        if (payload.dueDate) {
+                                            master.dueDate = payload.dueDate;
+                                        }
+                                    }
+
+                                    // 推入 trackings
+                                    this.trackings.push(newLog);
+
+                                    // 啟動回文連鎖處理
+                                    if (payload.action === "啟動回文") {
+                                        const newDocId = payload.docId + "_回";
+                                        if (!this.masters.some(m => m.docId === newDocId)) {
+                                            const linkedDoc = {
+                                                docId: newDocId,
+                                                date: new Date().toISOString().split('T')[0],
+                                                type: "發文",
+                                                vendor: this.selectedDoc.vendor || "",
+                                                tag: "回文",
+                                                subject: "回覆：" + (this.selectedDoc.subject || ""),
+                                                assignee: this.selectedDoc.assignee || "",
+                                                order: 1,
+                                                lastAction: "起草中",
+                                                status: "起草中",
+                                                fileName: "",
+                                                fileId: "",
+                                                signatureFileId: "",
+                                                relatedDocId: payload.docId,
+                                                dueDate: ""
+                                            };
+                                            this.masters.push(linkedDoc);
+
+                                            const linkedTracking = {
+                                                docId: newDocId,
+                                                order: 1,
+                                                date: new Date().toISOString().split('T')[0],
+                                                action: "起草中",
+                                                description: "針對收文案號 " + payload.docId + " 自動建立回文起草",
+                                                dueDate: "",
+                                                status: "起草中",
+                                                fileName: "",
+                                                fileId: "",
+                                                signatureFileId: ""
+                                            };
+                                            this.trackings.push(linkedTracking);
+
+                                            if (this.selectedDoc) {
+                                                this.selectedDoc.relatedDocId = newDocId;
+                                            }
+                                            if (master) {
+                                                master.relatedDocId = newDocId;
+                                            }
+                                        }
+                                    }
+
+                                    this.$nextTick(() => {
+                                        lucide.createIcons();
+                                    });
+
+                                    // 靜默後台刷新
+                                    this.refreshData(true);
+                                } else {
+                                    this.showToast("移轉狀態失敗：" + res.message, 'error');
+                                }
+                            })
+                            .catch(err => {
+                                this.loading = false;
+                                this.showToast("連線故障: " + err, 'error');
+                            });
+                    } catch (e) {
+                        this.loading = false;
+                        this.showToast("上傳處理異常: " + e.message, 'error');
+                    }
+                },
+
+                // 開啟簽章板
+                openSignaturePanel() {
+                    this.showSignaturePanel = true;
+                    this.hasSigned = false; // 重設核簽標記
+                    this.$nextTick(() => {
+                        this.initSignatureCanvas();
+                    });
+                },
+
+                // 初始化電子簽名 Canvas
+                initSignatureCanvas() {
+                    const oldCanvas = document.getElementById('sig-canvas');
+                    if (!oldCanvas) return;
+
+                    // 複製並替換節點，以徹底清除舊的事件監聽器，防止重複綁定與記憶體拉扯
+                    const canvas = oldCanvas.cloneNode(true);
+                    oldCanvas.parentNode.replaceChild(canvas, oldCanvas);
+
+                    this.sigCanvas = canvas;
+                    this.sigCtx = canvas.getContext('2d');
+
+                    // 根據父級容器的 layout 大小（不受 CSS 旋轉影響）動態計算實體寬高，以獲得完美高解析度、同時維持精準 1:1 不拉伸繪製
+                    const parent = canvas.parentElement;
+                    const rect = parent.getBoundingClientRect();
+                    const containerWidth = parent.offsetWidth || rect.width;
+                    const containerHeight = parent.offsetHeight || rect.height;
+
+                    canvas.width = Math.max(containerWidth * 2.5, 1200);
+                    canvas.height = Math.max(containerHeight * 2.5, 800);
+
+                    this.sigCtx.strokeStyle = '#0f172a'; // 深鐵灰色極佳觸感筆觸
+                    this.sigCtx.lineWidth = 6;
+                    this.sigCtx.lineCap = 'round';
+                    this.sigCtx.lineJoin = 'round';
+
+                    // 繪製背景與浮水印 [且在畫布中 顯示 文號 / 主旨 等訊息]
+                    this.drawCanvasMetadata();
+
+                    this.isDrawing = false;
+
+                    // 滑鼠繪圖
+                    canvas.addEventListener('mousedown', (e) => {
+                        this.isDrawing = true;
+                        this.hasSigned = true; // 標記已開始繪圖簽名
+                        this.sigCtx.beginPath();
+                        const coords = this.getCanvasCoords(e, canvas);
+                        this.sigCtx.moveTo(coords.x, coords.y);
+                    });
+
+                    canvas.addEventListener('mousemove', (e) => {
+                        if (!this.isDrawing) return;
+                        const coords = this.getCanvasCoords(e, canvas);
+                        this.sigCtx.lineTo(coords.x, coords.y);
+                        this.sigCtx.stroke();
+                    });
+
+                    canvas.addEventListener('mouseup', () => { this.isDrawing = false; });
+                    canvas.addEventListener('mouseleave', () => { this.isDrawing = false; });
+
+                    // 觸控繪圖 (支援行動端)
+                    canvas.addEventListener('touchstart', (e) => {
+                        this.isDrawing = true;
+                        this.hasSigned = true; // 標記已開始繪圖簽名
+                        this.sigCtx.beginPath();
+                        const coords = this.getCanvasCoords(e, canvas);
+                        this.sigCtx.moveTo(coords.x, coords.y);
+                        e.preventDefault();
+                    }, { passive: false });
+
+                    canvas.addEventListener('touchmove', (e) => {
+                        if (!this.isDrawing) return;
+                        const coords = this.getCanvasCoords(e, canvas);
+                        this.sigCtx.lineTo(coords.x, coords.y);
+                        this.sigCtx.stroke();
+                        e.preventDefault();
+                    }, { passive: false });
+
+                    canvas.addEventListener('touchend', () => { this.isDrawing = false; });
+                },
+
+                // 計算高解析度縮放下的 canvas 物理座標 (支援直式螢幕 rotate-90 完美映射)
+                getCanvasCoords(e, canvas) {
+                    const rect = canvas.getBoundingClientRect();
+                    let clientX, clientY;
+                    if (e.touches && e.touches.length > 0) {
+                        clientX = e.touches[0].clientX;
+                        clientY = e.touches[0].clientY;
+                    } else {
+                        clientX = e.clientX;
+                        clientY = e.clientY;
+                    }
+
+                    if (this.isPortrait) {
+                        // 直式螢幕：畫布視覺上旋轉 90 度順時針
+                        const vx = clientX - rect.left;
+                        const vy = clientY - rect.top;
+                        const x_phys = vy * (canvas.width / rect.height);
+                        const y_phys = canvas.height - (vx * (canvas.height / rect.width));
+                        return { x: x_phys, y: y_phys };
+                    } else {
+                        // 正常無旋轉橫向座標
+                        const x_phys = (clientX - rect.left) * (canvas.width / rect.width);
+                        const y_phys = (clientY - rect.top) * (canvas.height / rect.height);
+                        return { x: x_phys, y: y_phys };
+                    }
+                },
+
+                // 繪製背景、防偽水印與文號主旨等正式認證框 (使核簽 PNG 直接帶有數位浮水印證書效果)
+                drawCanvasMetadata() {
+                    if (!this.sigCtx || !this.sigCanvas) return;
+                    const ctx = this.sigCtx;
+                    const w = this.sigCanvas.width;
+                    const h = this.sigCanvas.height;
+
+                    // 1. 填滿白色底底色
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, w, h);
+
+                    const docId = this.selectedDoc ? this.selectedDoc.docId : 'N/A';
+                    const subject = this.selectedDoc ? this.selectedDoc.subject : 'N/A';
+                    const dateStr = new Date().toISOString().split('T')[0];
+
+                    // 3. 繪製精緻的左上角公文宣告資訊框 (完美融合)
+                    ctx.save();
+                    ctx.strokeStyle = '#e2e8f0';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    // 繪製圓角矩形資訊框
+                    ctx.roundRect(40, 40, 520, 140, 12);
+                    ctx.stroke();
+
+                    // 填充淺色背景
+                    ctx.fillStyle = '#f8fafc';
+                    ctx.roundRect(40, 40, 520, 140, 12);
+                    ctx.fill();
+
+                    // 文字繪製
+                    ctx.fillStyle = '#475569';
+                    ctx.font = 'bold 20px sans-serif';
+                    ctx.fillText(`📄 簽收單`, 65, 78);
+
+                    ctx.fillStyle = '#64748b';
+                    ctx.font = '16px monospace';
+                    ctx.fillText(`文號: ${docId}`, 65, 112);
+
+                    const displaySub = subject.length > 25 ? subject.substring(0, 25) + '...' : subject;
+                    ctx.fillText(`主旨: ${displaySub}`, 65, 138);
+                    ctx.fillText(`時間: ${dateStr}`, 65, 164);
+                    ctx.restore();
+
+                    // 4. 繪製防偽外邊線框
+                    ctx.save();
+                    ctx.strokeStyle = 'rgba(99, 102, 241, 0.15)'; // 淡淡的靛藍防護外線
+                    ctx.lineWidth = 4;
+                    ctx.beginPath();
+                    ctx.rect(20, 20, w - 40, h - 40);
+                    ctx.stroke();
+                    ctx.restore();
+                },
+
+                clearSignature() {
+                    if (this.sigCtx && this.sigCanvas) {
+                        this.sigCtx.clearRect(0, 0, this.sigCanvas.width, this.sigCanvas.height);
+                        this.drawCanvasMetadata();
+                        this.hasSigned = false; // 重設標記
+                    }
+                },
+
+                saveSignature() {
+                    if (!this.sigCanvas) return;
+
+                    // 防呆：確認是否有點擊或觸摸繪製 (不依賴非零像素比對，安全避開背景浮水印字元干擾)
+                    if (!this.hasSigned) {
+                        this.showToast("請先在核簽手寫板內繪製您的親筆簽名", 'error');
+                        return;
+                    }
+
+                    // 匯出 1600x1000 的極致高解析度 PNG（已自帶浮水印）
+                    this.transitionForm.signatureBase64 = this.sigCanvas.toDataURL('image/png');
+                    this.showSignaturePanel = false;
+                    this.showToast("親筆數位核章簽請點選送出儲存");
+                },
+
+
+                // === [ 系統參數設定表格控制 ] ===
+                openAddConfigModal() {
+                    this.configEditIndex = null;
+                    this.configForm = {
+                        vendor: "",
+                        tag: "",
+                        prefix: "",
+                        assignee: "",
+                        templateId: ""
+                    };
+                    this.showConfigEditModal = true;
+                },
+
+                openEditConfigModal(idx) {
+                    this.configEditIndex = idx;
+                    const row = this.configs[idx];
+                    this.configForm = {
+                        vendor: row.vendor || "",
+                        tag: row.tag || "",
+                        prefix: row.prefix || "",
+                        assignee: row.assignee || "",
+                        templateId: row.templateId || ""
+                    };
+                    this.showConfigEditModal = true;
+                },
+
+                saveConfigModal() {
+                    if (this.configEditIndex === null) {
+                        this.configs.push({ ...this.configForm });
+                    } else {
+                        this.configs[this.configEditIndex] = { ...this.configForm };
+                    }
+                    this.showConfigEditModal = false;
+                    this.showToast("項目已暫存於列表，請點選右上角『儲存設定』按鈕寫入資料庫！");
+                },
+
+                deleteConfigRow(idx) {
+                    this.configs.splice(idx, 1);
+                },
+
+                saveSystemConfig() {
+                    this.saving = true;
+                    this.api("saveSystemConfig", this.configs)
+                        .then(res => {
+                            this.saving = false;
+                            if (res.success) {
+                                this.showToast(res.message);
+                                this.refreshData();
+                            } else {
+                                this.showToast("儲存設定失敗：" + res.message, 'error');
+                            }
+                        })
+                        .catch(err => {
+                            this.saving = false;
+                            this.showToast("連線中斷: " + err, 'error');
+                        });
+                },
+
+
+                // === [ FSM 流程設定表格控制 ] ===
+                openAddFlowModal() {
+                    this.flowEditIndex = null;
+                    this.flowForm = {
+                        type: "收文",
+                        order: (this.flowConfigs.length > 0) ? Math.max(...this.flowConfigs.map(f => f.order || 1)) + 1 : 1,
+                        phase: "",
+                        status: "",
+                        action: "",
+                        nextStatus: "",
+                        defaultDesc: "",
+                        reqFile: "否",
+                        reqDueDate: "否",
+                        reqSignature: "否"
+                    };
+                    this.showFlowEditModal = true;
+                },
+
+                openEditFlowModal(idx) {
+                    this.flowEditIndex = idx;
+                    const row = this.flowConfigs[idx];
+                    this.flowForm = {
+                        type: row.type || "收文",
+                        order: row.order || 1,
+                        phase: row.phase || "",
+                        status: row.status || "",
+                        action: row.action || "",
+                        nextStatus: row.nextStatus || "",
+                        defaultDesc: row.defaultDesc || "",
+                        reqFile: row.reqFile || "否",
+                        reqDueDate: row.reqDueDate || "否",
+                        reqSignature: row.reqSignature || "否"
+                    };
+                    this.showFlowEditModal = true;
+                },
+
+                saveFlowModal() {
+                    if (this.flowEditIndex === null) {
+                        this.flowConfigs.push({ ...this.flowForm });
+                    } else {
+                        this.flowConfigs[this.flowEditIndex] = { ...this.flowForm };
+                    }
+                    this.showFlowEditModal = false;
+                    this.showToast("流程已暫存於列表，請點選右上角『儲存配置』按鈕寫入資料庫！");
+                },
+
+                deleteFlowRow(idx) {
+                    this.flowConfigs.splice(idx, 1);
+                },
+
+                saveFlowConfig() {
+                    this.saving = true;
+                    this.api("saveFlowConfig", this.flowConfigs)
+                        .then(res => {
+                            this.saving = false;
+                            if (res.success) {
+                                this.showToast(res.message);
+                                this.refreshData();
+                            } else {
+                                this.showToast("儲存流程設定失敗：" + res.message, 'error');
+                            }
+                        })
+                        .catch(err => {
+                            this.saving = false;
+                            this.showToast("連線中斷: " + err, 'error');
+                        });
+                },
+
+                // 全域輕量吐司通知 (Toast)
+                showToast(msg, type = 'success') {
+                    // 建立精美通知框
+                    const toast = document.createElement('div');
+                    toast.className = `fixed bottom-4 right-4 z-[99999] p-3 px-4 rounded-xl shadow-2xl border flex items-center gap-2.5 transition-all transform translate-y-10 opacity-0 ${type === 'error'
+                        ? 'bg-rose-50 text-rose-800 border-rose-200'
+                        : 'bg-white text-slate-800 border-emerald-200'
+                        }`;
+
+                    const iconName = type === 'error' ? 'alert-triangle' : 'check-circle';
+                    toast.innerHTML = `<i data-lucide="${iconName}" class="w-4 h-4 ${type === 'error' ? 'text-rose-500' : 'text-emerald-500'}"></i><span class="text-xs font-semibold">${msg}</span>`;
+
+                    document.body.appendChild(toast);
+                    lucide.createIcons({ attrs: { 'data-lucide': true } });
+
+                    // 動畫滑入
+                    setTimeout(() => {
+                        toast.classList.remove('translate-y-10', 'opacity-0');
+                        toast.classList.add('translate-y-0', 'opacity-100');
+                    }, 50);
+
+                    // 自動移除
+                    setTimeout(() => {
+                        toast.classList.remove('translate-y-0', 'opacity-100');
+                        toast.classList.add('translate-y-10', 'opacity-0');
+                        setTimeout(() => toast.remove(), 400);
+                    }, 3500);
+                }
+            };
+        }
+    </script>
+</body>
+
+</html>
