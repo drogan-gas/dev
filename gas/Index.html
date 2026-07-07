@@ -1,0 +1,2660 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>🏭 BISMS 現場管理系統</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=Iansui&display=swap");
+
+    html {
+      scrollbar-gutter: stable;
+    }
+
+    body {
+      font-family:
+        "Iansui",
+        "Noto Sans TC",
+        system-ui,
+        -apple-system,
+        sans-serif;
+      line-height: 1.6;
+    }
+
+    [x-cloak] {
+      display: none !important;
+    }
+
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+
+    .animate-slide-up {
+      animation: slideUp 0.3s ease-out;
+    }
+
+    @keyframes slideUp {
+      from {
+        transform: translateY(10px);
+        opacity: 0;
+      }
+
+      to {
+        transform: translateY(0);
+        opacity: 1;
+      }
+    }
+
+    .shadow-soft {
+      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.02);
+    }
+
+    /* Chrome, Safari, Edge, Opera - 隱藏 Webkit 核心瀏覽器的箭頭 */
+    input::-webkit-outer-spin-button,
+    input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    /* Firefox - 隱藏 Gecko 核心瀏覽器的箭頭 */
+    input[type="number"] {
+      -moz-appearance: textfield;
+      appearance: textfield;
+    }
+
+    /* 針對 iPad / Tablet 顯著放大字體 */
+    html {
+      font-size: 16px;
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior-y: contain;
+    }
+
+    @media (min-width: 640px) {
+      html {
+        font-size: 18px !important;
+        /* 顯著放大，從 16px 提升至 18px */
+      }
+    }
+
+    /* 針對大螢幕微調間距 */
+    .max-w-4xl {
+      max-width: 1000px !important;
+    }
+  </style>
+
+  <script>
+    /**
+     * 🚀 BISMS 前端 Alpine.js 風格與樂觀 UI 規範 (Optimistic UI Guidelines)
+     * -------------------------------------------------------------
+     * 為了保持極致流暢的使用者體驗與資料一致性，所有前端交互與 API 呼叫必須遵循以下四部曲：
+     * 
+     * 1. 快取優先 (Cache-First)：
+     *    首頁/切換時優先讀取本地 localStorage ('bisms_init_data') 進行秒速渲染，避免白屏等待；
+     *    隨後在背景異步獲取最新資料並靜默更新 UI 與快取。
+     * 
+     * 2. 樂觀渲染 (Optimistic UI)：
+     *    任何資料寫入（如：輸入檢查項目、建立任務、照片刪除/上傳佔位）都不應等待後端 API 回應。
+     *    應立即更新本地的 data 陣列及 UI 狀態，讓使用者感到「零延遲」。
+     * 
+     * 3. 減震傳送 (Debounce Transmission)：
+     *    針對頻繁觸發的輸入欄位（如：數值或文字輸入），必須實作 800ms 的 Debounce。
+     *    當使用者停止輸入達 800ms 時，才發送一次 api 請求，避免洗板與伺服器過載。
+     * 
+     * 4. 離線與失敗還原 (Offline & Failure Rollback)：
+     *    網路斷線 (navigator.onLine === false) 或 API 請求失敗時，必須立刻彈出 Toast 提示，
+     *    並將受影響的資料與 UI 還原 (Rollback) 至備份的舊值，保證前後端一致。
+     * -------------------------------------------------------------
+     */
+
+    const FINISHED_STATUSES = ["已提報結果", "已審查結果", "已生成報告", "已結案"];
+
+    const TAB_RULE_REGISTRY = {
+      admin: {
+        "待審工單": (s, cat, sub) => ["已提報結果", "已提交結果"].includes(s) && !sub.includes("追蹤案件"),
+        "工程管理": (s, cat, sub) => cat.includes("工程管理") && s !== "已結案",
+        "待歸檔": (s, cat, sub) => ["已審查結果", "已生成報告"].includes(s) && !sub.includes("追蹤案件")
+      },
+      user: {
+        "待辦工單": (s, cat, sub) => ["未開始", "執行中", "退回修改"].includes(s) && !cat.includes("工程管理") && !sub.includes("追蹤案件"),
+        "工程管理": (s, cat, sub) => ["未開始", "執行中", "退回修改", "已提報結果"].includes(s) && cat.includes("工程管理"),
+        "近期完成": (s, cat, sub) => FINISHED_STATUSES.includes(s) && !sub.includes("追蹤案件")
+      }
+    };
+
+    document.addEventListener('alpine:init', () => {
+      Alpine.data('app', () => ({
+        loading: true,
+        syncing: false,
+        isOffline: !navigator.onLine,
+        view: 'task-list',
+        statusFilter: '待辦工單',
+        selectedStaff: localStorage.getItem('lastSelectedStaff') || '全部',
+        selectedTemplate: '全部',
+        searchQuery: '',
+        activeTask: null,
+        activeChecklists: [],
+        uploadingPhotos: {},
+        currentUploadComponentId: '',
+        deletingPhotos: [], // 追蹤正在刪除的照片 ID
+        quickTaskModalOpen: false,
+        qtTemplateCode: '',
+        qtName: '',
+        qtAssignee: '',
+        qtParentTaskId: '',
+        isFollowUpMode: false,
+        qtFilterCategory: null,
+        qtInheritTask: null,
+        photoZoomUrl: null,
+        zoomPhotosList: [],
+        zoomPhotoIndex: -1,
+        toasts: [],
+        data: { tasks: [], staff: [], projects: [], checklists: [], results: [] },
+        isAdminMode: false,
+        passcodeModalOpen: false,
+        passcodeInput: '',
+        rejectModalOpen: false,
+        rejectReasonInput: '',
+        rejectingTaskId: '',
+        saveTimeouts: {},
+        savingStates: {},
+        instanceMap: {},
+
+        init() {
+          this.fetchInitialData();
+          window.addEventListener('online', () => { this.isOffline = false; this.showToast('已恢復網路連線', 'success'); });
+          window.addEventListener('offline', () => { this.isOffline = true; this.showToast('目前處於離線狀態', 'error'); });
+          this.$watch('statusFilter', () => { this.selectedTemplate = '全部'; this.searchQuery = ''; });
+          this.$watch('selectedStaff', () => { this.selectedTemplate = '全部'; this.searchQuery = ''; });
+          this.$watch('selectedTemplate', () => { this.searchQuery = ''; });
+        },
+
+        sanitizeTasks() {
+          if (!this.data || !this.data.tasks) return;
+          let changed = false;
+          this.data.tasks.forEach(t => {
+            if (!t.報告狀態) {
+              t.報告狀態 = "未開始";
+              changed = true;
+              this.api("updateTaskFields", {
+                taskId: t.任務ID,
+                fields: { 報告狀態: "未開始" }
+              });
+            }
+          });
+          if (changed) {
+            this.updateLocalCache();
+          }
+        },
+
+        // 新建追蹤案件 → 用 Quick Task Modal 取代（預設工單異常處理樣板，繼承父任務資訊）
+        showFollowUpModal(parentTaskId) {
+          const parentTask = this.data.tasks.find(t => t.任務ID === parentTaskId);
+          if (!parentTask) return;
+          // 找到「工單異常處理」樣板
+          const followUpTpl = this.data.templates?.find(t => t.樣板名稱 === '工單異常處理');
+          this.showQuickTaskModal({
+            templateCode: followUpTpl?.樣板代碼 || '',
+            name: parentTask.任務名稱 ? (parentTask.任務名稱 + '_' + (parentTask.樣板名稱 || '').replace('自主檢查表', '')) : '',
+            assignee: parentTask.負責人 || '',
+            parentTaskId,
+            inheritTask: parentTask,
+          });
+        },
+
+
+        showQuickTaskModal(opts = {}) {
+          this.isFollowUpMode = !!opts.parentTaskId;
+          this.qtParentTaskId = opts.parentTaskId || '';
+          this.qtInheritTask = opts.inheritTask || null;
+          this.qtFilterCategory = opts.filterCategory || null;
+          this.qtTemplateCode = opts.templateCode || '';
+          this.qtName = opts.name || '';
+          this.qtAssignee = opts.assignee || '';
+          if (opts.templateCode) this.handleQtTemplateChange(opts.templateCode, true);
+          this.quickTaskModalOpen = true;
+        },
+
+        handleQtTemplateChange(code, skipOverride = false) {
+          if (!code) {
+            if (!skipOverride) { this.qtName = ''; this.qtAssignee = ''; }
+            return;
+          }
+          const template = this.data.templates.find(t => t.樣板代碼 === code);
+          if (template && !skipOverride) {
+            this.qtAssignee = template.負責人 || '';
+          }
+        },
+
+        async submitQuickTask() {
+          if (!this.qtTemplateCode || !this.qtName || !this.qtAssignee) {
+            console.log('submitQuickTask', this.qtTemplateCode, this.qtName, this.qtAssignee);
+            this.showToast('請填寫所有欄位 (*)', 'error');
+            return;
+          }
+
+          this.syncing = true;
+
+          const template = this.data.templates.find(t => t.樣板代碼 === this.qtTemplateCode);
+          if (!template) {
+            this.showToast('找不到該樣板資訊', 'error');
+            this.syncing = false;
+            return;
+          }
+
+          const today = new Date();
+          const todayStr = `${today.getFullYear()}/${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getDate()).padStart(2, '0')}`;
+
+          let dueDateStr = '';
+          const duration = parseInt(template.工期, 10);
+          if (!isNaN(duration) && duration > 0) {
+            const dueDate = new Date();
+            dueDate.setDate(today.getDate() + duration - 1);
+            dueDateStr = `${dueDate.getFullYear()}/${String(dueDate.getMonth() + 1).padStart(2, '0')}/${String(dueDate.getDate()).padStart(2, '0')}`;
+          }
+
+          // 如果是追蹤案件模式，繼承父任務的分類/分項/專案
+          const inheritTask = this.qtInheritTask;
+          this.qtName = this.qtName || (inheritTask ? (inheritTask.任務名稱 + '_' + (inheritTask.樣板名稱 || '').replace('自主檢查表', '')) : (template.任務名稱 || ''))
+          const taskData = {
+            專案名稱: inheritTask ? (inheritTask.專案名稱 || template.專案名稱 || '新安廠區鍋爐') : (template.專案名稱 || '新安廠區鍋爐'),
+            樣板代碼: this.qtTemplateCode,
+            樣板名稱: template.樣板名稱 || '',
+            任務分類: inheritTask ? (inheritTask.任務分類 || template.任務分類 || '') : (template.任務分類 || ''),
+            任務分項: inheritTask ? '追蹤案件' : (template.任務分項 || ''),
+            任務名稱: this.qtName,
+            負責人: this.qtAssignee,
+            派工日期: todayStr,
+            截止日期: dueDateStr,
+            報告狀態: '未開始',
+            關聯工單: this.qtParentTaskId || ''
+          };
+
+          try {
+            const res = await this.api('createTask', {
+              taskData,
+              parentTaskId: this.qtParentTaskId || ''
+            });
+            if (res && res.success) {
+              taskData['任務ID'] = res.taskId;
+              taskData['樣板名稱'] = template.樣板名稱 || '';
+              this.data.tasks.push(taskData);
+
+              if (this.qtParentTaskId) {
+                const parent = this.data.tasks.find(t => t.任務ID === this.qtParentTaskId);
+                if (parent) parent['關聯工單'] = res.taskId;
+              }
+
+              this.updateLocalCache();
+              this.quickTaskModalOpen = false;
+              this.showToast('任務快速建立成功', 'success');
+              this.activeTask = (template.樣板名稱 === '工單異常處理' && this.qtParentTaskId)
+                ? (this.data.tasks.find(t => t.任務ID === this.qtParentTaskId) || taskData)
+                : taskData;
+              const activeCodes = String(this.activeTask.樣板代碼 || '').split(',').map(s => s.trim()).filter(Boolean);
+              this.activeChecklists = this.getOrderedChecklists(activeCodes);
+              this.view = 'task-detail';
+              window.scrollTo(0, 0);
+            } else {
+              this.showToast('建立失敗，請重試', 'error');
+            }
+          } catch (e) {
+            console.error(e);
+            this.showToast('連線異常，建立失敗', 'error');
+          } finally {
+            this.syncing = false;
+          }
+        },
+
+
+
+        showToast(message, type = 'success') {
+          const id = Date.now();
+          this.toasts.push({ id, message, type });
+          setTimeout(() => {
+            this.toasts = this.toasts.filter(t => t.id !== id);
+          }, 3000);
+        },
+
+        updateLocalCache() {
+          localStorage.setItem('bisms_init_data', JSON.stringify(this.data));
+        },
+
+        async api(action, payload) {
+          return new Promise((resolve) => {
+            if (typeof google !== 'undefined') {
+              const params = { ...(payload || {}), action };
+
+              google.script.run
+                .withSuccessHandler((res) => {
+                  if (res && res.success === false) {
+                    console.error("API Error:", res.message);
+                    this.showToast(res.message || '操作失敗', 'error');
+                    resolve(null);
+                  } else {
+                    resolve(res && res.data ? res.data : res);
+                  }
+                })
+                .withFailureHandler((err) => {
+                  console.error("Network Error:", err);
+                  this.showToast('網路連線異常', 'error');
+                  resolve(null);
+                })
+                .handleRoute(params);
+            } else {
+              console.warn("未偵測到 GAS 環境，請在正式環境中執行。");
+              resolve(null);
+            }
+          });
+        },
+
+        async fetchInitialData(skipCache = false, forceLoader = true) {
+          if (forceLoader) {
+            this.loading = true;
+          }
+          if (!skipCache) {
+            const cachedData = localStorage.getItem('bisms_init_data');
+            if (cachedData) {
+              try {
+                this.data = JSON.parse(cachedData);
+                this.sanitizeTasks();
+                if (!forceLoader) {
+                  this.loading = false; // 只有在不強制顯示 loader 的情況下才秒速渲染
+                }
+                this.checkUrlTaskId();
+              } catch (e) {
+                console.error("Cache parse error", e);
+              }
+            } else {
+              this.loading = true;
+            }
+          }
+
+          this.syncing = true;
+          // 背景取得最新資料
+          const result = await this.api('getInitData');
+          if (result) {
+            this.data = result;
+            this.sanitizeTasks();
+            localStorage.setItem('bisms_init_data', JSON.stringify(result));
+            this.checkUrlTaskId();
+          }
+          this.loading = false;
+          this.syncing = false;
+        },
+
+        checkUrlTaskId() {
+          try {
+            // Priority 1: Check outer Google Apps Script parent frame location parameters if running inside Google Workspace environment
+            if (typeof google !== 'undefined' && google.script && google.script.url) {
+              google.script.url.getLocation((location) => {
+                const tId = location.parameter && location.parameter.taskId;
+                if (tId) {
+                  const task = this.data.tasks.find(t => String(t.任務ID) === String(tId));
+                  if (task) {
+                    this.selectTask(task.任務ID);
+                  }
+                }
+              });
+            }
+
+            // Priority 2: Standard/Local browser location search (localhost, development, or simple iframe fallback)
+            const urlParams = new URLSearchParams(window.location.search);
+            let tId = urlParams.get('taskId');
+            if (!tId) {
+              const hash = window.location.hash;
+              if (hash && hash.includes('taskId=')) {
+                const match = hash.match(/taskId=([^&]+)/);
+                if (match) tId = decodeURIComponent(match[1]);
+              }
+            }
+            if (tId) {
+              const task = this.data.tasks.find(t => String(t.任務ID) === String(tId));
+              if (task) {
+                this.selectTask(task.任務ID);
+              }
+            }
+          } catch (e) {
+            console.error("Error reading taskId from URL", e);
+          }
+        },
+
+        getParentBaseUrl() {
+          const webAppUrl = (this.data && this.data.webAppUrl) || "";
+          if (webAppUrl && (webAppUrl.toLowerCase().includes('/dev') || webAppUrl.toLowerCase().endsWith('dev'))) {
+            return "";
+          }
+          try {
+            const urlParams = new URLSearchParams(window.location.search);
+            const parentUrl = urlParams.get('parentUrl');
+            if (parentUrl) {
+              localStorage.setItem('bisms_parent_url', parentUrl);
+              return parentUrl;
+            }
+          } catch (e) { }
+          try {
+            if (typeof google !== 'undefined' && google.script && google.script.url) {
+              google.script.url.getLocation((location) => {
+                const parentUrl = location.parameter && location.parameter.parentUrl;
+                if (parentUrl) {
+                  localStorage.setItem('bisms_parent_url', parentUrl);
+                }
+              });
+            }
+          } catch (e) { }
+          return localStorage.getItem('bisms_parent_url') || "";
+        },
+
+        getPmLink() {
+          const parentUrl = this.getParentBaseUrl();
+          if (parentUrl) {
+            try {
+              const urlObj = new URL(parentUrl);
+              urlObj.searchParams.set('page', 'pm');
+              return urlObj.toString();
+            } catch (e) {
+              return parentUrl + (parentUrl.includes('?') ? '&' : '?') + "page=pm";
+            }
+          }
+          const baseUrl = (this.data && this.data.webAppUrl) || "";
+          if (baseUrl) {
+            try {
+              const urlObj = new URL(baseUrl);
+              urlObj.searchParams.set('page', 'pm');
+              return urlObj.toString();
+            } catch (e) {
+              return baseUrl + (baseUrl.includes('?') ? '&' : '?') + "page=pm";
+            }
+          }
+          try {
+            const urlObj = new URL(window.location.href);
+            urlObj.searchParams.set('page', 'pm');
+            return urlObj.toString();
+          } catch (e) {
+            return "?page=pm";
+          }
+        },
+
+        handleStaffChange(val) {
+          this.selectedStaff = val;
+          localStorage.setItem('lastSelectedStaff', val);
+        },
+
+        toggleAdminMode() {
+          if (this.isAdminMode) {
+            this.isAdminMode = false;
+            this.statusFilter = '待辦工單';
+            this.showToast('已切換回巡檢端模式', 'info');
+          } else {
+            this.passcodeModalOpen = true;
+            this.passcodeInput = '';
+            setTimeout(() => {
+              const el = document.querySelector('input[type="password"]');
+              if (el) el.focus();
+            }, 100);
+          }
+        },
+
+        submitPasscode() {
+          if (this.passcodeInput === '1234') {
+            this.isAdminMode = true;
+            this.statusFilter = '待審工單';
+            this.passcodeModalOpen = false;
+            this.passcodeInput = '';
+            this.showToast('身分驗證成功，已進入審查模式', 'success');
+          } else {
+            this.showToast('密碼錯誤，請重新輸入', 'error');
+            this.passcodeInput = '';
+          }
+        },
+
+        get currentDisplayTasks() {
+          if (this.view === 'task-detail') {
+            return this.getTasksToDisplay();
+          }
+          return this.filteredTasks;
+        },
+
+        getTasksForTab(tab) {
+          if (!this.data || !this.data.tasks) return [];
+          const mode = this.isAdminMode ? 'admin' : 'user';
+          const rule = TAB_RULE_REGISTRY[mode]?.[tab];
+          if (!rule) return [];
+
+          return this.data.tasks.filter(t => {
+            const staffMatch = this.selectedStaff === "全部" || t.負責人 === this.selectedStaff;
+            if (!staffMatch) return false;
+            const s = t.報告狀態 || "未開始";
+            const cat = t.任務分類 || "";
+            const sub = t.任務分項 || "";
+            return rule(s, cat, sub);
+          });
+        },
+
+        get baseFilteredTasks() {
+          return this.getTasksForTab(this.statusFilter).sort((a, b) => {
+            const timeA = a.截止日期 ? new Date(a.截止日期).getTime() : Infinity;
+            const timeB = b.截止日期 ? new Date(b.截止日期).getTime() : Infinity;
+            const valA = isNaN(timeA) ? Infinity : timeA;
+            const valB = isNaN(timeB) ? Infinity : timeB;
+
+            if (valA === valB) {
+              const idA = String(a.任務ID || "");
+              const idB = String(b.任務ID || "");
+              return idA.localeCompare(idB, undefined, { numeric: true, sensitivity: 'base' });
+            }
+            return valA - valB;
+          });
+        },
+
+        getTaskTemplateName(task) {
+          if (!task) return '';
+          if (task.樣板名稱) return task.樣板名稱;
+          const codes = String(task.樣板代碼 || '').split(',').map(s => s.trim()).filter(Boolean);
+          const found = this.data.templates?.filter(x => codes.includes(String(x.樣板代碼)));
+          if (found && found.length > 0) {
+            return found.map(x => x.樣板名稱).join(',');
+          }
+          return '未知樣板';
+        },
+
+        get templateFilteredTasks() {
+          const tasks = this.baseFilteredTasks;
+          if (this.selectedTemplate && this.selectedTemplate !== '全部') {
+            return tasks.filter(t => this.getTaskTemplateName(t) === this.selectedTemplate);
+          }
+          return tasks;
+        },
+
+        get filteredTasks() {
+          let tasks = this.templateFilteredTasks;
+          if (this.searchQuery && this.searchQuery.trim()) {
+            const query = this.searchQuery.trim().toLowerCase();
+            tasks = tasks.filter(t => {
+              const nameMatch = t.任務名稱 && t.任務名稱.toLowerCase().includes(query);
+              const idMatch = t.任務ID && String(t.任務ID).toLowerCase().includes(query);
+              return nameMatch || idMatch;
+            });
+          }
+          return tasks;
+        },
+
+        get showSearchBar() {
+          return this.templateFilteredTasks.length > 10;
+        },
+
+        get templateCapsules() {
+          const tasks = this.baseFilteredTasks;
+          const counts = {};
+          tasks.forEach(t => {
+            const name = this.getTaskTemplateName(t);
+            counts[name] = (counts[name] || 0) + 1;
+          });
+
+          const list = Object.keys(counts).sort().map(name => ({
+            name,
+            count: counts[name]
+          }));
+
+          return [
+            { name: '全部', count: tasks.length },
+            ...list
+          ];
+        },
+
+        getStatusConfig(status) {
+          const s = status || "未開始";
+          if (["未開始", "執行中", ""].includes(s)) return { label: s || '未開始', color: 'bg-blue-50 text-blue-600 border-blue-100' };
+          if (s === "退回修改") return { label: '退回修改', color: 'bg-red-50 text-red-600 border-red-100' };
+          if (FINISHED_STATUSES.includes(s)) return { label: s, color: 'bg-green-50 text-green-600 border-green-100' };
+          return { label: s, color: 'bg-slate-50 text-slate-500 border-slate-100' };
+        },
+
+        getProcessStatusConfig(processStatus) {
+          if (!processStatus) return { label: '', color: 'hidden' };
+          const s = processStatus;
+          if (s === "持續進行") return { label: '持續進行', color: 'bg-blue-600 text-white border-blue-700 shadow-sm' };
+          if (s === "等待回覆") return { label: '等待回覆', color: 'bg-amber-500 text-white border-amber-600 shadow-sm' };
+          if (s === "暫緩處理") return { label: '暫緩處理', color: 'bg-purple-600 text-white border-purple-700 shadow-sm' };
+          if (s === "處理完成") return { label: '處理完成', color: 'bg-emerald-600 text-white border-emerald-700 shadow-sm' };
+          return { label: s, color: 'bg-slate-200 text-slate-950 border-slate-400 font-bold shadow-sm' };
+        },
+
+        selectTask(taskId) {
+          const task = this.data.tasks.find(t => t.任務ID === taskId);
+          if (task) {
+            this.activeTask = task;
+            const activeCodes = String(task.樣板代碼 || '').split(',').map(s => s.trim()).filter(Boolean);
+            this.activeChecklists = this.getOrderedChecklists(activeCodes);
+            this.view = 'task-detail';
+          }
+        },
+
+        getMultiModeForTemplate(templateCode) {
+          if (!templateCode) return '標準一對一';
+          const tpl = this.data.templates?.find(t => String(t.樣板代碼) === String(templateCode));
+          return tpl ? (tpl['多零件模式'] || tpl.多零件模式 || '標準一對一') : '標準一對一';
+        },
+
+        getMultiModeForTask(taskId) {
+          const task = this.data.tasks.find(t => t.任務ID === taskId);
+          if (!task) return '標準一對一';
+          const codes = String(task.樣板代碼 || '').split(',').map(s => s.trim()).filter(Boolean);
+          const tpls = this.data.templates?.filter(t => codes.includes(String(t.樣板代碼)));
+          const tpl = tpls ? tpls.find(t => (t['多零件模式'] || t.多零件模式) && (t['多零件模式'] || t.多零件模式) !== '標準一對一') || tpls[0] : null;
+          return tpl ? (tpl['多零件模式'] || tpl.多零件模式 || '標準一對一') : '標準一對一';
+        },
+
+        getOrderedChecklists(codes) {
+          const list = [];
+          codes.forEach(code => {
+            const items = this.data.checklists.filter(c => String(c.樣板代碼) === code);
+            list.push(...items);
+          });
+          return list;
+        },
+
+        getResult(taskId, checklistId, componentId = "") {
+          if (!taskId || !checklistId) return { 實際數值: "", 判定結果: "", 相片ID: "", 零件實例: "" };
+          const comp = componentId || "";
+          const r = this.data.results.find(res => res.任務ID === taskId && res.檢查ID === checklistId && (res.零件實例 || "") === comp);
+          return r || { 實際數值: "", 判定結果: "", 相片ID: "", 零件實例: comp };
+        },
+
+        getChecklistItemInstances(taskId, checklistId) {
+          const checklistItem = this.data.checklists.find(c => c.檢查ID === checklistId);
+          const tplCode = checklistItem ? checklistItem.樣板代碼 : "";
+          if (this.getMultiModeForTemplate(tplCode) !== '動態實例') {
+            return [];
+          }
+          const currentResults = this.data.results.filter(res => res.任務ID === taskId && res.檢查ID === checklistId && res.零件實例);
+          return currentResults.map(res => ({
+            id: res.零件實例,
+            name: res.零件實例,
+            value: res.實際數值 || '',
+            result: res.判定結果 || '',
+            photoId: res.相片ID || ''
+          }));
+        },
+
+        addInstance(taskId, checklistId) {
+          const list = this.getChecklistItemInstances(taskId, checklistId);
+          const today = new Date();
+          const todayStr = today.getFullYear() +
+            String(today.getMonth() + 1).padStart(2, '0') +
+            String(today.getDate()).padStart(2, '0');
+
+          if (list.length === 0) {
+            const singleRes = this.data.results.find(res => res.任務ID === taskId && res.檢查ID === checklistId && !res.零件實例);
+            if (singleRes && (singleRes.實際數值 || singleRes.相片ID)) {
+              singleRes.零件實例 = todayStr;
+              this.updateLocalCache();
+
+              if (!this.isOffline) {
+                this.api('renameComponent', {
+                  taskId: taskId,
+                  checklistId: checklistId,
+                  oldId: '',
+                  newId: todayStr
+                }).catch(err => console.error("Migration to backend failed:", err));
+              }
+              list.push({
+                id: todayStr,
+                name: todayStr,
+                value: singleRes.實際數值 || '',
+                result: singleRes.判定結果 || '',
+                photoId: singleRes.相片ID || ''
+              });
+            }
+          }
+
+          let nextId = "";
+          console.log("[BISMS DEBUG] addInstance called", { taskId, checklistId, listLength: list.length });
+          if (list.length > 0) {
+            const lastItem = list[list.length - 1];
+            const lastName = String(lastItem.name ?? lastItem.id ?? "");
+            const match = lastName.match(/^(.*?)(\d+)$/);
+            console.log("[BISMS DEBUG] lastItem info", { lastName, match });
+            if (match) {
+              const prefix = match[1];
+              const numStr = match[2];
+              let nextVal = parseInt(numStr, 10) + 1;
+              let nextValStr = String(nextVal).padStart(numStr.length, '0');
+              let candidate = prefix + nextValStr;
+              while (true) {
+                const inList = list.some(i => i.name === candidate || i.id === candidate);
+                const inResults = this.data.results.some(res => res.任務ID === taskId && res.檢查ID === checklistId && res.零件實例 === candidate);
+                console.log("[BISMS DEBUG] Loop 1 check", { candidate, inList, inResults });
+                if (!inList && !inResults) break;
+                nextVal++;
+                nextValStr = String(nextVal).padStart(numStr.length, '0');
+                candidate = prefix + nextValStr;
+              }
+              nextId = candidate;
+            }
+          }
+
+          if (!nextId) {
+            if (list.length === 0) {
+              let candidate = todayStr;
+              while (true) {
+                const inResults = this.data.results.some(res => res.任務ID === taskId && res.檢查ID === checklistId && res.零件實例 === candidate);
+                console.log("[BISMS DEBUG] Loop 2 check", { candidate, inResults });
+                if (!inResults) break;
+                let match = candidate.match(/^(.*?)(\d+)$/);
+                if (match) {
+                  const prefix = match[1];
+                  const numStr = match[2];
+                  let nextVal = parseInt(numStr, 10) + 1;
+                  let nextValStr = String(nextVal).padStart(numStr.length, '0');
+                  candidate = prefix + nextValStr;
+                } else {
+                  candidate = candidate + "_1";
+                }
+              }
+              nextId = candidate;
+            } else {
+              let nextNum = list.length + 1;
+              let candidate = "增設 " + nextNum;
+              while (true) {
+                const inList = list.some(i => i.name === candidate || i.id === candidate);
+                const inResults = this.data.results.some(res => res.任務ID === taskId && res.檢查ID === checklistId && res.零件實例 === candidate);
+                console.log("[BISMS DEBUG] Loop 3 check", { candidate, inList, inResults });
+                if (!inList && !inResults) break;
+                nextNum++;
+                candidate = "增設 " + nextNum;
+              }
+              nextId = candidate;
+            }
+          }
+          console.log("[BISMS DEBUG] Selected nextId:", nextId);
+
+          let r = this.data.results.find(res => res.任務ID === taskId && res.檢查ID === checklistId && res.零件實例 === nextId);
+          if (!r) {
+            this.data.results.push({
+              任務ID: taskId,
+              檢查ID: checklistId,
+              零件實例: nextId,
+              實際數值: "",
+              判定結果: "",
+              相片ID: ""
+            });
+          }
+
+          this.updateLocalCache();
+
+          if (!this.isOffline) {
+            this.api('submitResult', { taskId, checklistId, value: '', result: '', componentId: nextId })
+              .catch(err => console.error("Syncing added instance to backend failed:", err));
+          }
+        },
+
+        async deleteInstance(taskId, checklistId, instanceId) {
+          this.data.results = this.data.results.filter(res => !(res.任務ID === taskId && res.檢查ID === checklistId && res.零件實例 === instanceId));
+          this.updateLocalCache();
+
+          if (!this.isOffline) {
+            await this.api('submitResult', { taskId, checklistId, value: "", result: "", componentId: instanceId });
+          } else {
+            this.showToast('離線狀態，本機已清除，待連線後將同步', 'info');
+          }
+        },
+
+        async renameInstance(taskId, checklistId, oldId, newId) {
+          if (!newId) return;
+          newId = newId.trim();
+          if (newId === "" || newId === oldId) return;
+
+          const list = this.getChecklistItemInstances(taskId, checklistId);
+
+          if (list.some(i => i.id === newId)) {
+            this.showToast('零件名稱已存在', 'error');
+            return;
+          }
+
+          const oldRes = this.data.results.find(res => res.任務ID === taskId && res.檢查ID === checklistId && (res.零件實例 || "") === oldId);
+          if (!oldRes) return;
+
+          oldRes.零件實例 = newId;
+          this.updateLocalCache();
+
+          if (!this.isOffline) {
+            const saveKeyNew = taskId + '_' + checklistId + '_' + newId;
+            this.savingStates[saveKeyNew] = 'saving';
+
+            try {
+              const res = await this.api('renameComponent', {
+                taskId: taskId,
+                checklistId: checklistId,
+                oldId: oldId,
+                newId: newId
+              });
+
+              if (res && res.success) {
+                this.savingStates[saveKeyNew] = 'saved';
+                setTimeout(() => {
+                  delete this.savingStates[saveKeyNew];
+                }, 2000);
+              } else {
+                throw new Error("API return false");
+              }
+            } catch (err) {
+              console.error("重命名零件失敗:", err);
+              oldRes.零件實例 = oldId;
+              this.showToast('重命名同步失敗', 'error');
+              this.updateLocalCache();
+              delete this.savingStates[saveKeyNew];
+            }
+          } else {
+            this.showToast('離線狀態，已變更，連線後將同步', 'info');
+          }
+        },
+
+        getTasksToDisplay() {
+          if (!this.activeTask) return [];
+          const tasks = [this.activeTask];
+          if (this.activeTask.關聯工單) {
+            const related = this.data.tasks.find(t => t.任務ID === this.activeTask.關聯工單);
+            if (related && (related.報告狀態 === "執行中" || related.報告狀態 === "未開始" || related.報告狀態 === "退回修改")) tasks.unshift(related);
+            else if (related) tasks.push(related);
+          }
+          return tasks;
+        },
+
+        getChecklistsForTask(taskId) {
+          const task = this.data.tasks.find(t => t.任務ID === taskId);
+          if (!task) return [];
+          const codes = String(task.樣板代碼 || '').split(',').map(s => s.trim()).filter(Boolean);
+          return this.getOrderedChecklists(codes);
+        },
+
+        getTaskProgress(taskId) {
+          const checklists = this.getChecklistsForTask(taskId);
+          let total = 0;
+          let filled = 0;
+          checklists.forEach(c => {
+            const instances = this.getChecklistItemInstances(taskId, c.檢查ID);
+            if (instances && instances.length > 0) {
+              instances.forEach(ins => {
+                total++;
+                const r = this.getResult(taskId, c.檢查ID, ins.id);
+                if (r.實際數值 !== "" || r.判定結果 !== "" || r.相片ID !== "" || (!c.邏輯型態 && c.單位或選項)) {
+                  filled++;
+                }
+              });
+            } else {
+              total++;
+              const r = this.getResult(taskId, c.檢查ID);
+              if (r.實際數值 !== "" || r.判定結果 !== "" || r.相片ID !== "" || (!c.邏輯型態 && c.單位或選項)) {
+                filled++;
+              }
+            }
+          });
+          return { total, filled };
+        },
+
+        getRelatedTaskIds(taskId) {
+          const task = this.data.tasks.find(t => t.任務ID === taskId);
+          const relatedIds = [];
+          if (task) {
+            if (task.關聯工單) {
+              relatedIds.push(task.關聯工單);
+            }
+            this.data.tasks.forEach(t => {
+              if (t.關聯工單 === taskId && !relatedIds.includes(t.任務ID)) {
+                relatedIds.push(t.任務ID);
+              }
+            });
+          }
+          return { task, relatedIds };
+        },
+
+        getTabTaskCount(tab) {
+          return this.getTasksForTab(tab).length;
+        },
+
+        isOverdue(dateStr) {
+          if (!dateStr || String(dateStr).trim() === '' || dateStr === 'null' || dateStr === 'undefined') return false;
+          const dStr = String(dateStr).replace(/-/g, '/');
+          const d = new Date(dStr);
+          if (isNaN(d.getTime())) return false;
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          return d.getTime() < today.getTime();
+        },
+
+        isReadOnly(taskId) {
+          const task = this.data.tasks.find(t => t.任務ID === taskId);
+          if (!task) return true;
+          const s = task.報告狀態 || "未開始";
+          if (this.isAdminMode) {
+            return ["已審查結果", "已生成報告", "已結案"].includes(s);
+          } else {
+            return ["已提報結果", "已審查結果", "已生成報告", "已結案"].includes(s);
+          }
+        },
+
+        requiresPhoto(item) {
+          if (!item) return false;
+          if (item.邏輯型態 === '相片') return true;
+          const req = item['需附照片'];
+          return ['TRUE', '是', 'V', 'v', '1', 1, true, 'true'].includes(req);
+        },
+
+        calculateAutoJudgment(item, value) {
+          if (value === undefined || value === null || String(value).trim() === "") return "";
+          if (item.邏輯型態 === "數值") {
+            const num = parseFloat(value);
+            if (isNaN(num)) return "";
+
+            // 1. 如果有明確的「最小值」與「最大值」欄位
+            const minVal = parseFloat(item.最小值);
+            const maxVal = parseFloat(item.最大值);
+            const hasMin = !isNaN(minVal) && item.最小值 !== "";
+            const hasMax = !isNaN(maxVal) && item.最大值 !== "";
+
+            if (hasMin && hasMax) {
+              return (num >= minVal && num <= maxVal) ? "合格" : "不合格";
+            } else if (hasMin) {
+              return (num >= minVal) ? "合格" : "不合格";
+            } else if (hasMax) {
+              return (num <= maxVal) ? "合格" : "不合格";
+            }
+
+            // 2. 自動解析「判定標準」文字
+            const std = item.判定標準 || "";
+            // 範圍型，例如: -5 ~ +5, 10-20
+            const rangeMatch = std.match(/([+-]?\d*\.?\d+)\s*[~-]\s*([+-]?\d*\.?\d+)/);
+            if (rangeMatch) {
+              const rMin = parseFloat(rangeMatch[1]);
+              const rMax = parseFloat(rangeMatch[2]);
+              return (num >= rMin && num <= rMax) ? "合格" : "不合格";
+            }
+
+            // 大於等於型，例如: >= 10
+            const gteMatch = std.match(/>=\s*([+-]?\d*\.?\d+)/);
+            if (gteMatch) {
+              const rGte = parseFloat(gteMatch[1]);
+              return (num >= rGte) ? "合格" : "不合格";
+            }
+
+            // 小於等於型，例如: <= 100
+            const lteMatch = std.match(/<=\s*([+-]?\d*\.?\d+)/);
+            if (lteMatch) {
+              const rLte = parseFloat(lteMatch[1]);
+              return (num <= rLte) ? "合格" : "不合格";
+            }
+
+            return "";
+          }
+
+          if (item.邏輯型態 === "布林") {
+            const options = (item.單位或選項 || "是;否").split(";").filter(Boolean);
+            if (options.length > 0) {
+              // 第一個選項為合格 (e.g. 是/合格/OK)，其餘為不合格
+              return (String(value).trim() === String(options[0]).trim()) ? "合格" : "不合格";
+            }
+          }
+
+          return "不適用";
+        },
+
+        async saveItemResult(taskId, checklistId, value, componentId = "") {
+          const task = this.data.tasks.find(text => text.任務ID === taskId);
+          if (!task) return;
+
+          const item = this.getChecklistsForTask(taskId).find(c => c.檢查ID === checklistId);
+          const autoJudge = item ? this.calculateAutoJudgment(item, value) : "";
+
+          const compId = componentId || "";
+          let r = this.data.results.find(res => res.任務ID === taskId && res.檢查ID === checklistId && (res.零件實例 || "") === compId);
+
+          // 1. 備份舊值供錯誤時還原 (Rollback) - 僅在沒有待處理的計時器時備份
+          const key = compId ? taskId + "_" + checklistId + "_" + compId : taskId + "_" + checklistId;
+          if (!this.saveTimeouts[key]) {
+            this.saveTimeouts[key] = {
+              oldActualValue: r ? r.實際數值 : "",
+              oldResult: r ? r.判定結果 : "",
+              timer: null,
+              version: 0
+            };
+          }
+
+          // 遞增版本號，用作「版本鎖」防止非同步回傳競態 (Race Conditions)
+          this.saveTimeouts[key].version += 1;
+          const currentVersion = this.saveTimeouts[key].version;
+
+          // 計時開始，顯示儲存中
+          this.savingStates[key] = 'saving';
+
+          // 2. 立即、零延遲更新本地資料與 UI (樂觀渲染)
+          if (r) {
+            r.實際數值 = value;
+            r.判定結果 = autoJudge;
+          } else {
+            r = {
+              任務ID: taskId,
+              檢查ID: checklistId,
+              零件實例: compId,
+              實際數值: value,
+              判定結果: autoJudge,
+              相片ID: ""
+            };
+            this.data.results.push(r);
+          }
+
+          if (task.報告狀態 === "" || task.報告狀態 === "未開始" || task.報告狀態 === "退回修改" || !task.報告狀態) {
+            task.報告狀態 = "執行中";
+            task.執行進度 = "持續進行";
+          }
+
+          // 3. Debounce 送出 API (延遲 800ms，輸入過程中重置計時，避免洗板與卡頓)
+          if (this.saveTimeouts[key].timer) {
+            clearTimeout(this.saveTimeouts[key].timer);
+          }
+
+          this.saveTimeouts[key].timer = setTimeout(async () => {
+            if (this.isOffline) {
+              this.showToast('離線狀態，儲存失敗', 'error');
+              this.rollbackResult(taskId, checklistId, key, compId);
+              return;
+            }
+
+            const res = await this.api('submitResult', { taskId, checklistId, value, result: autoJudge, componentId: compId });
+
+            // 取得學當前的計時器備份物件（確認是否已被其他輸入強佔或清理）
+            const currentTimeout = this.saveTimeouts[key];
+            if (!currentTimeout) return;
+
+            // ⚠️ 關鍵防護：若當前版號小於此 timer 觸發時的最新 version，代表使用者在 API 執行期間又有新的輸入或異動
+            if (currentVersion < currentTimeout.version) {
+              console.log(`[BISMS] 忽略舊版非同步 API 回傳 (${currentVersion} < 最新版 ${currentTimeout.version})`);
+              return;
+            }
+
+            if (res) {
+              // 成功：更新後端確切回傳的判定與狀態
+              let rNew = this.data.results.find(res => res.任務ID === taskId && res.檢查ID === checklistId && (res.零件實例 || "") === compId);
+              if (rNew && res.result !== undefined) rNew.判定結果 = res.result;
+              if (res.newTaskStatus) task.報告狀態 = res.newTaskStatus;
+              if (res.newProcessStatus) task.執行進度 = res.newProcessStatus;
+
+              this.updateLocalCache();
+              // API 請求成功後變更為『已同步』狀態
+              this.savingStates[key] = 'saved';
+              delete this.saveTimeouts[key]; // 完成後清除計時器快取
+            } else {
+              // 失敗：Rollback 還原至該輸入序列最原始的值
+              r.實際數值 = currentTimeout.oldActualValue;
+              r.判定結果 = currentTimeout.oldResult;
+              this.showToast('資料儲存失敗，已自動還原', 'error');
+              this.savingStates[key] = '';
+              delete this.saveTimeouts[key];
+            }
+          }, 800);
+        },
+
+        rollbackResult(taskId, checklistId, key, componentId = "") {
+          const task = this.data.tasks.find(t => t.任務ID === taskId);
+          const compId = componentId || "";
+          const r = this.data.results.find(res => res.任務ID === taskId && res.檢查ID === checklistId && (res.零件實例 || "") === compId);
+          const backup = this.saveTimeouts[key];
+          if (backup) {
+            if (r) {
+              r.實際數值 = backup.oldActualValue;
+              r.判定結果 = backup.oldResult;
+            }
+            if (backup.timer) {
+              clearTimeout(backup.timer);
+            }
+            delete this.saveTimeouts[key];
+          }
+          this.savingStates[key] = '';
+        },
+
+        async updateTaskProcessStatus(taskId, status) {
+          const task = this.data.tasks.find(t => t.任務ID === taskId);
+          if (!task) return;
+          if (this.isOffline) {
+            this.showToast('離線狀態無法更新處理進度', 'error');
+            return;
+          }
+
+          const oldStatus = task.執行進度;
+          task.執行進度 = status;
+
+          const res = await this.api('updateTaskProcessStatus', { taskId, status });
+          if (!res) {
+            task.執行進度 = oldStatus;
+          } else {
+            this.updateLocalCache();
+          }
+        },
+
+        triggerUpload(taskId, checklistId, componentId = "") {
+          this.currentUploadTaskId = taskId;
+          this.currentUploadChecklistId = checklistId;
+          this.currentUploadComponentId = componentId || "";
+          document.getElementById('global-photo-upload').click();
+        },
+
+        async handlePhotoUpload(event) {
+          const taskId = this.currentUploadTaskId;
+          const task = this.data.tasks.find(t => t.任務ID === taskId);
+          if (!task) return;
+          const files = Array.from(event.target.files);
+          if (!files.length || !this.currentUploadChecklistId) return;
+
+          const checklistId = this.currentUploadChecklistId;
+          const checklistItem = this.data.checklists.find(c => c.檢查ID === checklistId) || {};
+          const componentId = this.currentUploadComponentId || "";
+          const key = componentId ? taskId + "_" + checklistId + "_" + componentId : taskId + "_" + checklistId;
+          if (!this.uploadingPhotos[key]) this.uploadingPhotos[key] = [];
+
+          // 1. 初始化排隊對象
+          const newUploads = files.map((file, i) => {
+            const objUrl = URL.createObjectURL(file);
+            return {
+              id: 'tmp_' + Date.now() + '_' + i,
+              status: '處理中',
+              base64: objUrl,
+              objectUrl: objUrl, // 紀錄以利後續釋放記憶體
+              file: file
+            };
+          });
+
+          this.uploadingPhotos[key].push(...newUploads);
+          event.target.value = ""; // Clear input
+
+          // 2. 背景處理上傳
+          (async () => {
+            try {
+              for (const up of newUploads) {
+                // 壓縮與上傳
+                up.base64 = await this.compressPhoto(up.file);
+                up.status = "上傳中";
+
+                const res = await this.api('submitResult', {
+                  taskId,
+                  checklistId,
+                  base64Photo: up.base64,
+                  taskName: task.任務名稱 || '',
+                  templateName: task.樣板名稱 || '',
+                  taskCategory: task.任務分類 || '',
+                  subItemName: task.任務分項 || '',
+                  checkItemTag: checklistItem.報告標籤 || '',
+                  componentId: componentId
+                });
+
+                if (res && res.photoId) {
+                  this.uploadingPhotos[key] = this.uploadingPhotos[key].filter(u => u.id !== up.id);
+
+                  let r = this.data.results.find(res => res.任務ID === taskId && res.檢查ID === checklistId && (res.零件實例 || "") === componentId);
+                  if (r) {
+                    r.相片ID = res.photoId;
+                    if (res.result) r.判定結果 = res.result;
+                    if (res.newTaskStatus) task.報告狀態 = res.newTaskStatus;
+                  } else {
+                    this.data.results.push({
+                      任務ID: taskId,
+                      檢查ID: checklistId,
+                      零件實例: componentId,
+                      實際數值: "",
+                      判定結果: res.result || "",
+                      相片ID: res.photoId
+                    });
+                  }
+
+                  this.updateLocalCache();
+                } else {
+                  up.status = '失敗';
+                }
+              }
+            } catch (e) {
+              console.error(e);
+              this.showToast('照片處理發生異常', 'error');
+            } finally {
+              // 釋放記憶體與清理失敗的佔位
+              newUploads.forEach(u => {
+                if (u.objectUrl) URL.revokeObjectURL(u.objectUrl);
+              });
+              this.uploadingPhotos[key] = this.uploadingPhotos[key].filter(
+                u => u.status !== '失敗'
+              );
+            }
+          })();
+        },
+
+        async deletePhoto(taskId, checklistId, photoId, componentId = "") {
+          const task = this.data.tasks.find(t => t.任務ID === taskId);
+          if (!task) return;
+
+          if (this.deletingPhotos.includes(photoId)) return;
+
+          this.deletingPhotos.push(photoId);
+
+          const compId = componentId || "";
+
+          try {
+            const res = await this.api('deletePhoto', {
+              taskId: taskId,
+              checklistId: checklistId,
+              photoIdToDelete: photoId,
+              componentId: compId
+            });
+
+            if (res) {
+              let r = this.data.results.find(res => res.任務ID === taskId && res.檢查ID === checklistId && (res.零件實例 || "") === compId);
+              if (r) {
+                r.相片ID = res.photoIds || "";
+                if (res.result !== undefined) r.判定結果 = res.result;
+                if (res.newTaskStatus) task.報告狀態 = res.newTaskStatus;
+
+                const item = this.getChecklistsForTask(taskId).find(c => c.檢查ID === checklistId);
+                if (item?.邏輯型態 === '相片' && !r.相片ID && res.result === undefined) {
+                  r.判定結果 = "";
+                }
+              }
+
+              this.updateLocalCache();
+            } else {
+              this.showToast('刪除失敗，請重新整理', 'error');
+            }
+          } catch (e) {
+            console.error("Delete failed:", e);
+            this.showToast('連線異常', 'error');
+          } finally {
+            this.deletingPhotos = this.deletingPhotos.filter(id => id !== photoId);
+          }
+        },
+
+        compressPhoto(file) {
+          return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = (e) => {
+              const img = new Image();
+              img.src = e.target.result;
+              img.onload = () => {
+                const canvas = document.createElement("canvas");
+                const MAX = 1200;
+                let w = img.width, h = img.height;
+                if (w > MAX) { h *= MAX / w; w = MAX; }
+                canvas.width = w; canvas.height = h;
+                canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+                resolve(canvas.toDataURL("image/jpeg", 0.8));
+              };
+            };
+          });
+        },
+
+        zoomPhoto(id, list = []) {
+          this.zoomPhotosList = list;
+          this.zoomPhotoIndex = list.indexOf(id);
+          this.photoZoomUrl = "https://drive.google.com/thumbnail?id=" + id + "&sz=w1200";
+        },
+        closeZoom() {
+          this.photoZoomUrl = null;
+          this.zoomPhotosList = [];
+          this.zoomPhotoIndex = -1;
+        },
+        navigateZoom(direction) {
+          if (!this.zoomPhotosList || this.zoomPhotosList.length <= 1) return;
+          if (direction === 'prev') {
+            this.zoomPhotoIndex = (this.zoomPhotoIndex - 1 + this.zoomPhotosList.length) % this.zoomPhotosList.length;
+          } else {
+            this.zoomPhotoIndex = (this.zoomPhotoIndex + 1) % this.zoomPhotosList.length;
+          }
+          const nextId = this.zoomPhotosList[this.zoomPhotoIndex];
+          this.photoZoomUrl = "https://drive.google.com/thumbnail?id=" + nextId + "&sz=w1200";
+        },
+
+        async _updateTaskStatus(taskId, apiName, apiPayload, newReportStatus, newProcessStatus, successMsg, returnTo = null) {
+          const task = this.data.tasks.find(t => t.任務ID === taskId);
+          if (!task) return;
+          if (this.isOffline) {
+            this.showToast('離線狀態無法執行此操作', 'error');
+            return;
+          }
+
+          const oldStatus = task.報告狀態;
+          const oldProcessStatus = task.執行進度;
+
+          task.報告狀態 = newReportStatus;
+          if (newProcessStatus !== undefined) {
+            task.執行進度 = newProcessStatus;
+          }
+
+          if (returnTo) {
+            this.selectTask(returnTo);
+          } else {
+            this.view = 'task-list';
+            window.scrollTo(0, 0);
+            this.activeTask = null;
+          }
+          this.showToast(successMsg, successMsg.includes('退回') ? 'info' : 'success');
+
+          const res = await this.api(apiName, apiPayload);
+          if (!res) {
+            task.報告狀態 = oldStatus;
+            if (newProcessStatus !== undefined) task.執行進度 = oldProcessStatus;
+            this.showToast('操作失敗，請重試', 'error');
+          } else {
+            this.fetchInitialData(true, false);
+          }
+        },
+
+        async finishTask(taskId, returnTo = null) {
+          await this._updateTaskStatus(taskId, 'finishTask', { taskId }, '已提報結果', undefined, '工單已提交審查', returnTo);
+        },
+
+        rejectTask(taskId) {
+          const task = this.data.tasks.find(t => t.任務ID === taskId);
+          if (!task) return;
+          if (this.isOffline) {
+            this.showToast('離線狀態無法退回修改', 'error');
+            return;
+          }
+          this.rejectingTaskId = taskId;
+          this.rejectReasonInput = '';
+          this.rejectModalOpen = true;
+        },
+
+        async submitRejectTask() {
+          const taskId = this.rejectingTaskId;
+          const reason = this.rejectReasonInput;
+          this.rejectModalOpen = false;
+
+          const { relatedIds } = this.getRelatedTaskIds(taskId);
+
+          // Reject the main task
+          await this._updateTaskStatus(taskId, 'rejectTask', { taskId, remark: reason }, '退回修改', '等待回覆', '已退回修改');
+
+          // Reject related tasks if any
+          for (const relId of relatedIds) {
+            await this._updateTaskStatus(relId, 'rejectTask', { taskId: relId, remark: reason }, '退回修改', '等待回覆', '已退回修改');
+          }
+        },
+
+        async approveTask(taskId) {
+          const { relatedIds } = this.getRelatedTaskIds(taskId);
+
+          // Approve the main task
+          await this._updateTaskStatus(taskId, 'approveTask', { taskId }, '已審查結果', undefined, '工單已審核通過');
+
+          // Approve related tasks if any
+          for (const relId of relatedIds) {
+            await this._updateTaskStatus(relId, 'approveTask', { taskId: relId }, '已審查結果', undefined, '工單已審核通過');
+          }
+        },
+
+        async closeTask(taskId) {
+          const { relatedIds } = this.getRelatedTaskIds(taskId);
+
+          // Close the main task
+          await this._updateTaskStatus(taskId, 'closeTask', { taskId }, '已結案', undefined, '工單已結案歸檔');
+
+          // Close related tasks if any
+          for (const relId of relatedIds) {
+            await this._updateTaskStatus(relId, 'closeTask', { taskId: relId }, '已結案', undefined, '工單已結案歸檔');
+          }
+        },
+
+        async generateTrackingReport(taskId) {
+          if (this.isOffline) {
+            this.showToast('離線狀態無法產出報告', 'error');
+            return;
+          }
+          this.showToast('正在產生追蹤報告...', 'info');
+          const res = await this.api('generateTrackingReport', { taskId });
+          if (res) {
+            this.showToast('報告已產出！', 'success');
+          }
+        }
+      }));
+    });
+  </script>
+</head>
+
+<body class="bg-[#F0F2F5] text-slate-900 min-h-screen flex flex-col" x-data="app()" x-cloak>
+
+  <!-- 離線狀態提示條 -->
+  <div x-show="isOffline" x-transition.opacity x-cloak
+    class="bg-red-600 text-white text-[13px] font-black py-2 px-4 text-center z-[10000] flex items-center justify-center gap-2 shadow-md sticky top-0">
+    <div class="w-4 h-4 animate-pulse" x-text="'⚠️'"></div>
+    <span>目前處於離線狀態，暫停資料同步</span>
+  </div>
+
+  <!-- Loading Overlay -->
+  <div x-show="loading"
+    class="fixed inset-0 bg-white/95 backdrop-blur-md z-[9999] flex flex-col items-center justify-center">
+    <div class="relative">
+      <div class="w-20 h-20 border-4 border-slate-100 rounded-full"></div>
+      <div class="w-20 h-20 border-4 border-blue-600 rounded-full border-t-transparent animate-spin absolute inset-0">
+      </div>
+      <div class="absolute inset-0 flex items-center justify-center text-blue-600" x-text="'🏭'"></div>
+    </div>
+  </div>
+
+  <!-- App Header -->
+  <header class="text-white sticky top-0 z-50 shadow-lg min-h-[4rem] flex flex-col items-center"
+    :class="view === 'task-list' ? 'text-white bg-[#1D4ED8]' : 'bg-blue-800'">
+    <div class="w-full max-w-4xl mx-auto px-4 flex items-center justify-between pt-1">
+      <div x-show="view === 'task-list'" class="flex items-center gap-3">
+        <a :href="getPmLink()" target="_top"
+          class="flex items-center gap-2 hover:opacity-80 transition-opacity active:scale-[0.98] outline-none"
+          title="前往 PM 專案管理與派工系統">
+          <div class="text-white flex items-center justify-center shrink-0">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+              <polyline points="9 22 9 12 15 12 15 22" />
+            </svg>
+          </div>
+          <h1 class="font-black text-lg flex items-center gap-1.5 whitespace-nowrap">
+            施工管理系統
+          </h1>
+        </a>
+      </div>
+      <div x-show="view === 'task-detail'" class="flex items-center">
+        <button @click="view = 'task-list'; activeTask = null; window.scrollTo(0, 0);"
+          class="flex items-center gap-2 font-black text-xl">
+          <div class="text-white flex items-center justify-center">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m15 18-6-6 6-6" />
+            </svg>
+          </div>
+          <span class="text-white font-black transition-all text-left" :class="!activeTask?.任務名稱 ? 'text-base sm:text-lg' : 
+                    (activeTask.任務名稱.length > 18 ? 'text-xs sm:text-sm' : 
+                    (activeTask.任務名稱.length > 10 ? 'text-sm sm:text-base' : 'text-base sm:text-lg'))"
+            x-text="activeTask?.任務名稱 || ''"></span>
+        </button>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <!-- 鎖頭解鎖按鈕 -->
+        <button @click="toggleAdminMode()"
+          class="p-2 rounded-full transition-all active:scale-95 flex items-center justify-center"
+          :class="isAdminMode ? 'bg-yellow-500 text-white shadow-sm ring-2 ring-yellow-300' : 'hover:bg-blue-600 text-blue-200'">
+          <template x-if="isAdminMode">
+            <!-- 🚨 Alert Shield -->
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path
+                d="M20 13c0 5-3.5 7.5-7.66 9.7a1 1 0 0 1-.68 0C7.5 20.5 4 18 4 13V6a1 1 0 0 1 .76-.97l8-2a1 1 0 0 1 .48 0l8 2A1 1 0 0 1 20 6z" />
+              <line x1="12" x2="12" y1="8" y2="12" />
+              <line x1="12" x2="12.01" y1="16" y2="16" />
+            </svg>
+          </template>
+          <template x-if="!isAdminMode">
+            <!-- 🛡️ Shield -->
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path
+                d="M20 13c0 5-3.5 7.5-7.66 9.7a1 1 0 0 1-.68 0C7.5 20.5 4 18 4 13V6a1 1 0 0 1 .76-.97l8-2a1 1 0 0 1 .48 0l8 2A1 1 0 0 1 20 6z" />
+            </svg>
+          </template>
+        </button>
+
+        <!-- 重新整理按鈕 -->
+        <button @click="fetchInitialData(true)"
+          class="p-2 hover:bg-blue-600 rounded-full transition-colors flex items-center justify-center"
+          :class="syncing ? 'animate-spin opacity-50 pointer-events-none' : ''">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+            <path d="M21 3v5h-5" />
+            <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+            <path d="M8 16H3v5" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- task-list 人員選擇 (清單模式顯示) -->
+    <div x-show="view === 'task-list'" class="w-full max-w-4xl mx-auto px-4 pb-1 flex items-center justify-between">
+      <div class="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
+        <div>👷</div>
+        <div class="relative flex items-center">
+          <select :value="selectedStaff" @change="handleStaffChange($event.target.value)"
+            class="bg-transparent font-black text-xs outline-none cursor-pointer text-white appearance-none pr-10">
+            <option value="全部" class="text-slate-900">全部人員 (管理員)</option>
+            <template x-for="s in data.staff" :key="s.人員姓名">
+              <option :value="s.人員姓名" x-text="s.人員姓名" class="text-slate-900"></option>
+            </template>
+          </select>
+          <div class="text-blue-100 absolute right-0 pointer-events-none flex items-center justify-center">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- task-detail 顯示樣板名稱 -->
+    <div x-show="view === 'task-detail'" class="w-full max-w-4xl mx-auto px-4 pb-1 flex items-center justify-between">
+      <div class="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
+        <div>📋</div>
+        <span class="text-white text-xs sm:text-sm font-bold" x-text="getTaskTemplateName(activeTask)"></span>
+      </div>
+      <span class="text-xs sm:text-sm font-black text-white border border-white rounded px-2 py-0 tracking-normal"
+        x-text="getStatusConfig(activeTask?.報告狀態).label"></span>
+    </div>
+
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 w-full max-w-4xl mx-auto pt-2 px-1 sm:px-4 pb-36 sm:pb-24" x-data="{
+      swipeStartX: 0,
+      swipeStartY: 0,
+      handleMainTouchStart(e) {
+        if (view !== 'task-detail') return;
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.closest('input') || e.target.closest('textarea') || e.target.closest('button') || e.target.closest('select')) return;
+        this.swipeStartX = e.touches[0].clientX;
+        this.swipeStartY = e.touches[0].clientY;
+      },
+      handleMainTouchEnd(e) {
+        if (view !== 'task-detail') return;
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.closest('input') || e.target.closest('textarea') || e.target.closest('button') || e.target.closest('select')) return;
+        
+        let diffX = e.changedTouches[0].clientX - this.swipeStartX;
+        let diffY = e.changedTouches[0].clientY - this.swipeStartY;
+        
+        // Horizontal swipe from right to left (diffX < -100px) with debounce ratio validation to prevent vertical scroll mistriggers
+        if (diffX < -100 && Math.abs(diffY) < 60 && Math.abs(diffX) > Math.abs(diffY) * 2.5) {
+          view = 'task-list';
+          activeTask = null;
+          window.scrollTo(0, 0);
+        }
+      }
+    }" @touchstart="handleMainTouchStart($event)" @touchend="handleMainTouchEnd($event)">
+
+    <!-- 頂部橫向滑動捷徑膠囊 task-list   -->
+    <template x-if="view === 'task-list' && templateCapsules.length > 1" class="w-full mb-4 px-2 sm:px-0"
+      x-transition.opacity>
+      <div
+        class="flex sm:flex-wrap items-center gap-2 overflow-x-auto sm:overflow-x-visible pb-2 no-scrollbar scroll-smooth -mx-2 px-2 sm:mx-0 sm:px-0"
+        style="-webkit-overflow-scrolling: touch;">
+        <template x-for="cap in templateCapsules" :key="cap.name">
+          <button @click="selectedTemplate = cap.name"
+            class="flex-shrink-0 flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold transition-all border shadow-sm select-none"
+            :class="selectedTemplate === cap.name 
+              ? 'bg-blue-600 text-white border-blue-600 font-extrabold scale-105' 
+              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300'">
+            <span x-text="cap.name.replace('自主檢查表', '')"></span>
+            <span class="px-1.5 py-0.5 rounded-full text-[10px]"
+              :class="selectedTemplate === cap.name ? 'bg-blue-500 text-white font-black' : 'bg-slate-100 text-slate-500 font-bold'"
+              x-text="cap.count"></span>
+          </button>
+        </template>
+      </div>
+    </template>
+
+    <!-- 搜尋框 - 當 task-list 模式且 task 數量大於 10 時才出現 -->
+    <template x-if="view === 'task-list' && showSearchBar" class="w-full mb-4 px-2 sm:px-0" x-transition.opacity>
+      <div class="relative w-full">
+        <span class="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none text-slate-400">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+        </span>
+        <input type="text" x-model="searchQuery" placeholder="搜尋任務名稱或工單 ID..."
+          class="w-full h-12 pl-12 pr-10 bg-white border-2 border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 transition-all shadow-sm" />
+        <!-- 清除按鈕 -->
+        <button x-show="searchQuery" @click="searchQuery = ''"
+          class="absolute inset-y-0 right-0 flex items-center pr-3.5 text-slate-400 hover:text-slate-600 active:scale-95 transition-all outline-none">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    </template>
+
+    <!-- 統一的任務視圖 (列表task-list與詳情task-detail共用) -->
+    <div x-show="view === 'task-list' || (view === 'task-detail' && activeTask)"
+      class="space-y-2 sm:space-y-6 animate-slide-up">
+      <template x-for="currentTask in currentDisplayTasks" :key="currentTask.任務ID">
+        <div
+          class="relative transition-all mb-8 rounded-3xl bg-white/60 border-2 border-dashed shadow-sm px-1 py-4 sm:p-4"
+          :class="view === 'task-detail' ?  (currentTask.任務ID === activeTask?.關聯工單 ? ' border-purple-200 bg-purple-100/50 ' : ' border-blue-300 bg-blue-100/50 ') : ''">
+
+          <!-- 任務摘要卡片 上方標籤 (共用 Header) -->
+          <div class="flex items-center justify-between p-0">
+            <!-- 左上角工單 ID 與 +追蹤 快捷鍵 Flex 容器 -->
+            <div class="flex items-center gap-2">
+              <!-- 工單 ID 膠囊標籤 -->
+              <div class="flex items-center gap-1 ml-3 px-2.5 py-0 text-[10px] sm:text-[11px] font-black x-cloak"
+                :class="view === 'task-detail' && currentTask.任務ID === activeTask?.關聯工單 ? 'bg-purple-100 text-purple-700 border-purple-200' : ''">
+                <template x-if="view === 'task-detail' && currentTask.任務ID === activeTask?.關聯工單">
+                  <span class="flex items-center gap-0.5 mr-0.5">
+                    <span>🔗 關聯工單</span>
+                  </span>
+                </template>
+                <span class="opacity-60">#</span><span x-text="currentTask.任務ID"></span>
+              </div>
+            </div>
+            <!-- 右上角狀態膠囊標籤 -->
+            <div class="flex items-center">
+              <!-- 逾期警示 -->
+              <div x-show="isOverdue(currentTask.截止日期) && (currentTask.報告狀態 ==='未開始' || currentTask.報告狀態 ==='執行中')"
+                class="bg-red-50 text-red-600 px-2.5 py-0.5 rounded-full text-[10px] sm:text-[11px] font-black border shadow-sm tracking-wider"
+                x-text="'⚠️逾期'">
+              </div>
+              <!-- 執行進度 -->
+              <div x-show="currentTask.執行進度" :class="getProcessStatusConfig(currentTask.執行進度)?.color"
+                class="px-2.5 py-0.5 rounded-full text-[10px] sm:text-[11px] font-black border shadow-sm tracking-wider"
+                x-text="getProcessStatusConfig(currentTask.執行進度)?.label">
+              </div>
+              <!-- 報告狀態 -->
+              <div x-show="currentTask.報告狀態!=='執行中' || !currentTask.執行進度"
+                :class="getStatusConfig(currentTask.報告狀態).color"
+                class="px-2.5 py-0.5 rounded-full text-[10px] sm:text-[11px] font-black border shadow-sm tracking-wider"
+                x-text="getStatusConfig(currentTask.報告狀態).label">
+              </div>
+            </div>
+          </div>
+          <!-- 任務摘要卡片 (共用 Header) -->
+          <div @click="if(view === 'task-list') selectTask(currentTask.任務ID)"
+            class="bg-white px-3.5 py-3 rounded-2xl shadow-sm border-2 transition-all" :class="[
+              view === 'task-list' ? 'cursor-pointer active:scale-[0.98] border-slate-200 border-l-[6px] border-l-blue-600' : 
+              (currentTask.任務ID === activeTask?.關聯工單 ? 'border-purple-300 border-l-[6px] border-l-purple-600 bg-purple-50/20' : 'border-slate-200 border-l-[6px] border-l-blue-600 bg-white')
+            ]">
+            <div class="flex justify-between items-start ">
+              <div>
+                <div class="text-base font-black text-blue-500 uppercase tracking-widest flex items-center gap-1">
+                  <span x-text="getTaskTemplateName(currentTask)"></span>
+                </div>
+                <h3 class="font-black text-lg text-slate-800" x-text="currentTask.任務名稱"></h3>
+              </div>
+            </div>
+
+            <div class="mt-3 flex flex-wrap gap-2 items-center text-[11px] font-bold">
+              <!-- 任務類別 -->
+              <div class="flex items-center gap-1.5 bg-slate-100/50 px-2 py-1 rounded-md text-slate-500">
+                <span x-text="'🏷️ ' + currentTask.任務分類 + ' · ' + currentTask.任務分項"></span>
+              </div>
+              <!-- 負責人 -->
+              <div x-show="selectedStaff === '全部' || currentTask.負責人 !== selectedStaff"
+                class="flex items-center gap-1.5 bg-blue-50 px-2 py-1 rounded-md text-blue-600">
+                <span x-text="'👷 ' + currentTask.負責人"></span>
+              </div>
+              <!-- 截止日期 -->
+              <div x-show="currentTask.截止日期" class="flex items-center gap-1.5 px-2 py-1 rounded-md"
+                :class="isOverdue(currentTask.截止日期) ? 'bg-red-50 text-red-600 animate-pulse' : 'bg-slate-50 text-slate-500'">
+                <span x-text="isOverdue(currentTask.截止日期) ? '⚠️' : '📅'"></span>
+                <span x-text="currentTask.截止日期"></span>
+              </div>
+              <!-- 關聯工單 -->
+              <div x-show="currentTask.關聯工單"
+                class="flex items-center gap-1.5 px-2 py-1 rounded-md bg-purple-50 text-purple-600">
+                <span x-text="'🔗 ' + currentTask.關聯工單"></span>
+              </div>
+            </div>
+
+            <!-- 補充說明 -->
+            <div x-show="currentTask.報告狀態==='退回修改' && currentTask.補充說明"
+              class="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-md text-red-600 font-bold mt-2">
+              <span x-text="'⚠ ' + currentTask.補充說明"></span>
+            </div>
+
+            <!-- 執行進度切換按鈕 (僅在詳細視圖顯示) -->
+            <template
+              x-if="view === 'task-detail' && (currentTask.報告狀態 === '執行中' || currentTask.報告狀態 === '未開始'|| currentTask.報告狀態 === '')">
+              <div class="mt-4 bg-white rounded-2xl px-1 py-1 sm:p-2 border-2 border-slate-100 shadow-sm space-y-3">
+                <div class="grid grid-cols-3 gap-1.5 sm:gap-2">
+                  <template x-for="status in ['持續進行', '等待回覆', '暫緩處理']">
+                    <button
+                      @click.stop="updateTaskProcessStatus(currentTask.任務ID, currentTask.執行進度 === status ? '' : status)"
+                      class="py-2.5 px-1 rounded-xl text-base sm:text-lg font-black transition-all border-2 active:scale-95 outline-none"
+                      :class="currentTask.執行進度 === status ? 'bg-orange-500 text-white border-orange-600 shadow-orange-100 shadow-lg' : 'bg-slate-50 text-slate-400 border-slate-100 hover:bg-slate-100'"
+                      :disabled="currentTask.報告狀態 !== '執行中'" x-text="status">
+                    </button>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <!-- 只在詳細視圖顯示的下半部內容 (檢查項目與按鈕) -->
+          <template x-if="view === 'task-detail'">
+            <div>
+              <!-- 檢查項目清單 -->
+              <div class="space-y-4">
+                <template x-for="item in getChecklistsForTask(currentTask.任務ID)" :key="item.檢查ID">
+                  <div class="bg-white rounded-2xl border-2 overflow-hidden shadow-soft"
+                    :class="(getResult(currentTask.任務ID, item.檢查ID).實際數值) ? 'border-slate-200' : (currentTask.任務ID === activeTask?.關聯工單 ? ' border-purple-600 ring-4 ring-purple-100/70' : ' border-blue-600 ring-4 ring-blue-100/70')">
+                    <div class="px-3.5 pt-4 sm:px-5 sm:pt-5 bg-slate-50/50 flex justify-between items-start gap-2">
+                      <div class="flex-1 min-w-0">
+                        <h4 class="font-black text-lg text-slate-900" x-text="'📝 ' + item.檢查項目"></h4>
+                        <div x-show="item.判定標準" class="pt-1 pb-2 text-sm text-slate-500 font-bold whitespace-pre-line"
+                          x-text="item.判定標準"></div>
+                      </div>
+
+                      <!-- Status / Judgment Badge -->
+                      <div class="flex items-center gap-1.5 shrink-0 pt-0.5">
+                        <!-- 儲存中 / 已同步 Indicator -->
+                        <template x-if="savingStates[currentTask.任務ID + '_' + item.檢查ID]">
+                          <span class="inline-flex items-center text-xs select-none transition-all mr-1">
+                            <template x-if="savingStates[currentTask.任務ID + '_' + item.檢查ID] === 'saving'">
+                              <svg class="animate-spin h-4 w-4 text-orange-500 flex-shrink-0" fill="none"
+                                viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor"
+                                  stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor"
+                                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
+                                </path>
+                              </svg>
+                            </template>
+                            <template x-if="savingStates[currentTask.任務ID + '_' + item.檢查ID] === 'saved'">
+                              <svg class="h-4 w-4 text-emerald-500 flex-shrink-0" fill="none" viewBox="0 0 24 24"
+                                stroke="currentColor" stroke-width="3">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                              </svg>
+                            </template>
+                          </span>
+                        </template>
+
+                        <!-- Case 1: Unfilled -->
+                        <template
+                          x-if="!getResult(currentTask.任務ID, item.檢查ID).實際數值 && !getResult(currentTask.任務ID, item.檢查ID).相片ID">
+                          <span
+                            class="px-2.5 py-1 bg-blue-700 text-white text-[10px] sm:text-xs font-black rounded-full uppercase tracking-wider shadow-md shadow-blue-100 animate-pulse whitespace-nowrap"
+                            x-text="['數值', '布林'].includes(item.邏輯型態) ? '待填數據' : '待填寫'"></span>
+                        </template>
+
+                        <!-- Case 2: Filled -->
+                        <template
+                          x-if="getResult(currentTask.任務ID, item.檢查ID).實際數值 || getResult(currentTask.任務ID, item.檢查ID).相片ID">
+                          <div class="flex items-center">
+                            <!-- Numeric / Boolean has evaluation result -->
+                            <template x-if="['數值', '布林'].includes(item.邏輯型態)">
+                              <span
+                                class="px-2.5 py-1 rounded-full text-[10px] sm:text-xs font-black uppercase shadow-sm whitespace-nowrap"
+                                :class="getResult(currentTask.任務ID, item.檢查ID).判定結果 === '合格' ? 'bg-green-600 text-white shadow-green-100' : 
+                                     (getResult(currentTask.任務ID, item.檢查ID).判定結果 === '不合格' ? 'bg-red-600 text-white shadow-red-100' : 'bg-blue-700 text-white animate-pulse')"
+                                x-text="getResult(currentTask.任務ID, item.檢查ID).判定結果 || '待填數據'"></span>
+                            </template>
+                            <!-- Other types show "已填寫" -->
+                            <template x-if="!['數值', '布林'].includes(item.邏輯型態)">
+                              <span
+                                class="px-2.5 py-1 bg-green-100 text-green-700 border border-green-200 text-[10px] sm:text-xs font-black rounded-full uppercase whitespace-nowrap">已填寫</span>
+                            </template>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+
+                    <div class="p-3.5 pt-0 sm:p-5 sm:pt-0 space-y-2">
+                      <template x-if="getChecklistItemInstances(currentTask.任務ID, item.檢查ID).length === 0">
+                        <div class="space-y-2">
+                          <template x-if="item.邏輯型態 === '數值'">
+                            <div class="relative flex-1">
+                              <input type="number" :value="getResult(currentTask.任務ID, item.檢查ID).實際數值"
+                                @input="saveItemResult(currentTask.任務ID, item.檢查ID, $event.target.value)"
+                                @focus="$event.target.scrollIntoView({ behavior: 'smooth', block: 'center' })"
+                                onwheel="this.blur()" :disabled="isReadOnly(currentTask.任務ID)" placeholder="0.00"
+                                inputmode="decimal"
+                                class="w-full h-16 bg-slate-50 border-2 border-slate-300 rounded-xl px-4 text-2xl font-black text-blue-900 outline-none focus:bg-white focus:border-blue-800 focus:ring-4 focus:ring-blue-100 transition-all shadow-inner disabled:opacity-50" />
+                              <template x-if="item.單位或選項">
+                                <span
+                                  class="absolute right-2 top-1/2 -translate-y-1/2 text-base font-black text-slate-400 whitespace-nowrap pointer-events-none"
+                                  x-text="item.單位或選項"></span>
+                              </template>
+                            </div>
+                          </template>
+
+                          <template x-if="item.邏輯型態 === '布林'">
+                            <div x-data="{ options: (item.單位或選項 || '是;否').split(';').filter(Boolean) }"
+                              class="flex gap-2">
+                              <template x-for="o in options">
+                                <button @click="saveItemResult(currentTask.任務ID, item.檢查ID, o)"
+                                  :disabled="isReadOnly(currentTask.任務ID)"
+                                  :class="getResult(currentTask.任務ID, item.檢查ID).實際數值 === o ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-100 text-slate-500'"
+                                  class="flex-1 py-4 rounded-xl font-black text-lg transition-all" x-text="o"></button>
+                              </template>
+                            </div>
+                          </template>
+
+                          <template x-if="item.邏輯型態 === '多選'">
+                            <div x-data="{ options: (item.單位或選項 || '').split(';').filter(Boolean) }"
+                              x-init="if (options.length === 1 && !getResult(currentTask.任務ID, item.檢查ID).實際數值 && !isReadOnly(currentTask.任務ID)) saveItemResult(currentTask.任務ID, item.檢查ID, options[0])"
+                              class="w-full">
+                              <template x-if="options.length <= 4 && options.length > 0">
+                                <div class="grid grid-cols-2 gap-3">
+                                  <template x-for="opt in options">
+                                    <button @click="saveItemResult(currentTask.任務ID, item.檢查ID, opt)"
+                                      :disabled="isReadOnly(currentTask.任務ID)"
+                                      :class="getResult(currentTask.任務ID, item.檢查ID).實際數值 === opt ? 'bg-blue-800 text-white shadow-xl border-blue-900' : 'bg-slate-100 text-slate-600 border-slate-200'"
+                                      class="py-4 rounded-xl font-black text-base border-2 transition-all active:scale-95"
+                                      x-text="opt"></button>
+                                  </template>
+                                </div>
+                              </template>
+                              <template x-if="options.length > 4">
+                                <div class="relative">
+                                  <select :value="getResult(currentTask.任務ID, item.檢查ID).實際數值"
+                                    @change="saveItemResult(currentTask.任務ID, item.檢查ID, $event.target.value)"
+                                    :disabled="isReadOnly(currentTask.任務ID)"
+                                    class="w-full h-16 bg-slate-100 border-2 border-slate-200 rounded-xl px-4 text-lg font-black text-blue-800 outline-none focus:bg-white focus:border-blue-700 appearance-none shadow-inner disabled:opacity-50">
+                                    <option value="">請點擊選擇...</option>
+                                    <template x-for="opt in options">
+                                      <option :value="opt"
+                                        :selected="getResult(currentTask.任務ID, item.檢查ID).實際數值 === opt" x-text="opt">
+                                      </option>
+                                    </template>
+                                  </select>
+                                </div>
+                              </template>
+                            </div>
+                          </template>
+
+                          <template x-if="item.邏輯型態 === '文字'">
+                            <textarea :value="getResult(currentTask.任務ID, item.檢查ID).實際數值"
+                              @change="saveItemResult(currentTask.任務ID, item.檢查ID, $event.target.value)"
+                              @focus="$event.target.scrollIntoView({ behavior: 'smooth', block: 'center' })"
+                              :disabled="isReadOnly(currentTask.任務ID)"
+                              class="w-full h-24 bg-slate-50 border-2 border-slate-300 rounded-xl p-4 font-bold text-blue-900 placeholder:text-slate-400 outline-none focus:bg-white focus:border-blue-800 focus:ring-4 focus:ring-blue-100 transition-all shadow-inner disabled:opacity-50"
+                              :placeholder="(!item.判定標準 ? item.檢查項目 : item.判定標準) + '...'"></textarea>
+                          </template>
+
+                          <template x-if="!item.邏輯型態">
+                            <div class="w-full px-4 flex items-center justify-between"
+                              x-init="if (!getResult(currentTask.任務ID, item.檢查ID).實際數值 && !isReadOnly(currentTask.任務ID) && item.單位或選項) saveItemResult(currentTask.任務ID, item.檢查ID, item.單位或選項)">
+                              <span class="font-bold text-blue-800 text-xl" x-text="item.單位或選項"></span>
+                            </div>
+                          </template>
+
+                          <div x-show="requiresPhoto(item)" class="mt-4 border-t border-slate-100 pt-3">
+                            <div class="grid grid-cols-3 gap-3 sm:grid-cols-5 sm:gap-4">
+                              <!-- 1. 渲染已存在的照片 -->
+                              <template
+                                x-for="(p, pIdx) in (getResult(currentTask.任務ID, item.檢查ID).相片ID || '').split(',').map(s => s.trim()).filter(Boolean)"
+                                :key="p">
+                                <div
+                                  class="relative aspect-square bg-slate-100 rounded-lg border border-slate-200 overflow-hidden shadow-inner group">
+                                  <img :src="'https://drive.google.com/thumbnail?id='+p+'&sz=w200'"
+                                    referrerpolicy="no-referrer"
+                                    class="w-full h-full object-cover transition-transform group-active:scale-110 cursor-pointer"
+                                    @click="zoomPhoto(p, (getResult(currentTask.任務ID, item.檢查ID).相片ID || '').split(',').map(s => s.trim()).filter(Boolean))" />
+                                  <div
+                                    class="absolute top-0 right-0 p-1 bg-black/30 text-white text-base font-mono rounded-bl z-10"
+                                    x-text="'#' + (pIdx + 1)"></div>
+
+                                  <!-- 刪除中遮罩 (轉圈圈) - 整合為統一的縮圖狀態樣式 -->
+                                  <template x-if="deletingPhotos.includes(p)">
+                                    <div
+                                      class="absolute inset-0 bg-black/60 backdrop-blur-[2px] flex flex-col items-center justify-center z-20">
+                                      <div class="w-8 h-8 text-white flex items-center justify-center">
+                                        <div class="w-full h-full">
+                                          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"
+                                            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                                            stroke-linecap="round" stroke-linejoin="round"
+                                            class="w-full h-full animate-spin">
+                                            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                                            <path d="M21 3v5h-5" />
+                                            <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                                            <path d="M8 16H3v5" />
+                                          </svg>
+                                        </div>
+                                      </div>
+                                      <span class="text-[12px] font-bold text-white mt-1.5 drop-shadow-md"
+                                        style="font-family: 'Noto Sans TC', sans-serif;">刪除中</span>
+                                    </div>
+                                  </template>
+
+                                  <button x-show="!isReadOnly(currentTask.任務ID) && !deletingPhotos.includes(p)"
+                                    @click.stop="deletePhoto(currentTask.任務ID, item.檢查ID, p)"
+                                    class="absolute top-1 left-1 bg-red-500/85 hover:bg-red-600 text-white w-6 h-6 sm:w-7 sm:h-7 rounded-full backdrop-blur transition-all disabled:opacity-50 z-10 shadow-sm active:scale-90 flex items-center justify-center">
+                                    <div
+                                      class="w-3.5 h-3.5 sm:w-4 sm:h-4 [&>svg]:w-full [&>svg]:h-full flex items-center justify-center">
+                                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+                                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                        stroke-linejoin="round" class="w-full h-full">
+                                        <path d="M3 6h18" />
+                                        <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                                        <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                                        <line x1="10" y1="11" x2="10" y2="17" />
+                                        <line x1="14" y1="11" x2="14" y2="17" />
+                                      </svg>
+                                    </div>
+                                  </button>
+                                </div>
+                              </template>
+
+                              <!-- 2. 渲染上傳中的占位格 -->
+                              <template x-for="u in (uploadingPhotos[currentTask.任務ID+'_'+item.檢查ID] || [])"
+                                :key="u.id">
+                                <div
+                                  class="relative aspect-square bg-slate-100 rounded-lg border border-slate-200 overflow-hidden shadow-inner flex items-center justify-center opacity-70">
+                                  <template x-if="u.base64">
+                                    <img :src="u.base64" class="w-full h-full object-cover absolute inset-0 blur-sm" />
+                                  </template>
+                                  <div
+                                    class="z-20 flex flex-col items-center justify-center absolute inset-0 bg-black/10">
+                                    <div class="w-8 h-8 text-white flex items-center justify-center">
+                                      <div class="w-full h-full">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"
+                                          viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                                          stroke-linecap="round" stroke-linejoin="round"
+                                          class="w-full h-full animate-spin">
+                                          <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                                          <path d="M21 3v5h-5" />
+                                          <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                                          <path d="M8 16H3v5" />
+                                        </svg>
+                                      </div>
+                                    </div>
+                                    <span class="text-[12px] font-bold text-white mt-1.5 drop-shadow-md"
+                                      x-text="u.status" style="font-family: 'Noto Sans TC', sans-serif;"></span>
+                                  </div>
+                                </div>
+                              </template>
+
+                              <!-- 3. 新增按鈕 -->
+                              <div class="relative aspect-square" x-show="!isReadOnly(currentTask.任務ID)">
+                                <button @click="triggerUpload(currentTask.任務ID, item.檢查ID)"
+                                  :class="item.邏輯型態 === '相片' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-slate-50 text-slate-400 border-slate-300'"
+                                  class="w-full h-full rounded-lg border-2 border-dashed flex flex-col items-center justify-center gap-1 transition-all active:scale-95 outline-none">
+                                  <div class="text-blue-600">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+                                      fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                      stroke-linejoin="round" class="w-6 h-6">
+                                      <path
+                                        d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
+                                      <circle cx="12" cy="13" r="3" />
+                                    </svg>
+                                  </div>
+                                  <span class="text-xs font-black">新增照片</span>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </template>
+
+                      <!-- 如果有零件實例，渲染實例清單，否則渲染單一標準輸入 -->
+                      <template x-if="getChecklistItemInstances(currentTask.任務ID, item.檢查ID).length > 0">
+                        <div class="space-y-3 mt-3">
+                          <template x-for="ins in getChecklistItemInstances(currentTask.任務ID, item.檢查ID)" :key="ins.id">
+                            <div class="p-3 bg-slate-50 border border-slate-200 rounded-xl relative">
+                              <!-- 實例標題與刪除按鈕 -->
+                              <div class="flex items-center justify-between pb-2 border-b border-slate-200/60 mb-2">
+                                <span class="text-sm font-black text-slate-700 flex items-center gap-1">
+                                  🏷️
+                                  <template x-if="isReadOnly(currentTask.任務ID)">
+                                    <span x-text="ins.name" class="text-blue-600"></span>
+                                  </template>
+                                  <template x-if="!isReadOnly(currentTask.任務ID)">
+                                    <input type="text" :value="ins.name"
+                                      @change="renameInstance(currentTask.任務ID, item.檢查ID, ins.id, $event.target.value)"
+                                      class="bg-transparent border-b border-dashed border-slate-300 focus:border-blue-500 focus:bg-white px-1.5 py-0.5 rounded text-sm text-blue-600 font-black w-28 outline-none"
+                                      placeholder="零件名稱" />
+                                  </template>
+                                </span>
+
+                                <div class="flex items-center gap-2">
+                                  <!-- 儲存中 / 已同步 Indicator -->
+                                  <template x-if="savingStates[currentTask.任務ID + '_' + item.檢查ID + '_' + ins.id]">
+                                    <span class="inline-flex items-center text-xs select-none transition-all">
+                                      <template
+                                        x-if="savingStates[currentTask.任務ID + '_' + item.檢查ID + '_' + ins.id] === 'saving'">
+                                        <svg class="animate-spin h-4 w-4 text-orange-500" fill="none"
+                                          viewBox="0 0 24 24">
+                                          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor"
+                                            stroke-width="4"></circle>
+                                          <path class="opacity-75" fill="currentColor"
+                                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
+                                          </path>
+                                        </svg>
+                                      </template>
+                                      <template
+                                        x-if="savingStates[currentTask.任務ID + '_' + item.檢查ID + '_' + ins.id] === 'saved'">
+                                        <svg class="h-4 w-4 text-emerald-500" fill="none" viewBox="0 0 24 24"
+                                          stroke="currentColor" stroke-width="3">
+                                          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                                        </svg>
+                                      </template>
+                                    </span>
+                                  </template>
+
+                                  <!-- Result Badge -->
+                                  <template
+                                    x-if="getResult(currentTask.任務ID, item.檢查ID, ins.id).實際數值 || getResult(currentTask.任務ID, item.檢查ID, ins.id).相片ID">
+                                    <span>
+                                      <template x-if="['數值', '布林'].includes(item.邏輯型態)">
+                                        <span class="px-2 py-0.5 rounded-full text-[10px] font-black uppercase"
+                                          :class="getResult(currentTask.任務ID, item.檢查ID, ins.id).判定結果 === '合格' ? 'bg-green-600 text-white shadow' : 
+                                               (getResult(currentTask.任務ID, item.檢查ID, ins.id).判定結果 === '不合格' ? 'bg-red-600 text-white shadow' : 'bg-blue-600 text-white shadow')"
+                                          x-text="getResult(currentTask.任務ID, item.檢查ID, ins.id).判定結果 || '待填數據'"></span>
+                                      </template>
+                                      <template x-if="!['數值', '布林'].includes(item.邏輯型態)">
+                                        <span
+                                          class="px-2 py-0.5 bg-green-100 text-green-700 border border-green-200 text-[10px] font-black rounded-full">已填寫</span>
+                                      </template>
+                                    </span>
+                                  </template>
+
+                                  <button @click.stop="deleteInstance(currentTask.任務ID, item.檢查ID, ins.id)"
+                                    :disabled="isReadOnly(currentTask.任務ID)"
+                                    class="text-red-500 hover:text-red-700 p-1 rounded transition-colors duration-200 animate-none outline-none">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              </div>
+
+                              <!-- Inputs specific to this instance -->
+                              <template x-if="item.邏輯型態 === '數值'">
+                                <div class="relative w-full">
+                                  <input type="number" :value="getResult(currentTask.任務ID, item.檢查ID, ins.id).實際數值"
+                                    @input="saveItemResult(currentTask.任務ID, item.檢查ID, $event.target.value, ins.id)"
+                                    :disabled="isReadOnly(currentTask.任務ID)" placeholder="0.00" inputmode="decimal"
+                                    class="w-full h-11 bg-white border border-slate-300 rounded-lg px-3 text-lg font-black text-blue-900 outline-none focus:border-blue-800 transition-all shadow-inner disabled:opacity-50" />
+                                  <template x-if="item.單位或選項">
+                                    <span
+                                      class="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-black text-slate-400 pointer-events-none"
+                                      x-text="item.單位或選項"></span>
+                                  </template>
+                                </div>
+                              </template>
+
+                              <template x-if="item.邏輯型態 === '布林'">
+                                <div x-data="{ options: (item.單位或選項 || '是;否').split(';').filter(Boolean) }"
+                                  class="flex gap-1">
+                                  <template x-for="o in options">
+                                    <button @click="saveItemResult(currentTask.任務ID, item.檢查ID, o, ins.id)"
+                                      :disabled="isReadOnly(currentTask.任務ID)"
+                                      :class="getResult(currentTask.任務ID, item.檢查ID, ins.id).實際數值 === o ? 'bg-blue-600 text-white shadow' : 'bg-white text-slate-500 border border-slate-200'"
+                                      class="flex-1 py-1 px-2 rounded-lg font-black text-sm transition-all"
+                                      x-text="o"></button>
+                                  </template>
+                                </div>
+                              </template>
+
+                              <template x-if="item.邏輯型態 === '多選'">
+                                <div x-data="{ options: (item.單位或選項 || '').split(';').filter(Boolean) }" class="w-full">
+                                  <div class="grid grid-cols-2 gap-2">
+                                    <template x-for="opt in options">
+                                      <button @click="saveItemResult(currentTask.任務ID, item.檢查ID, opt, ins.id)"
+                                        :disabled="isReadOnly(currentTask.任務ID)"
+                                        :class="getResult(currentTask.任務ID, item.檢查ID, ins.id).實際數值 === opt ? 'bg-blue-800 text-white border-blue-900' : 'bg-white text-slate-600 border border-slate-200'"
+                                        class="py-2.5 rounded-lg text-sm border font-black transition-all"
+                                        x-text="opt"></button>
+                                    </template>
+                                  </div>
+                                </div>
+                              </template>
+
+                              <template x-if="item.邏輯型態 === '文字'">
+                                <textarea :value="getResult(currentTask.任務ID, item.檢查ID, ins.id).實際數值"
+                                  @change="saveItemResult(currentTask.任務ID, item.檢查ID, $event.target.value, ins.id)"
+                                  :disabled="isReadOnly(currentTask.任務ID)"
+                                  class="w-full h-16 bg-white border border-slate-300 rounded-lg p-2 font-bold text-sm text-blue-600 placeholder:text-slate-400 outline-none focus:border-blue-800 transition-all shadow-inner disabled:opacity-50"
+                                  placeholder="增設新項目之狀況說明..."></textarea>
+                              </template>
+
+                              <template x-if="!item.邏輯型態">
+                                <div class="w-full px-2 flex items-center justify-between"
+                                  x-init="if (!getResult(currentTask.任務ID, item.檢查ID, ins.id).實際數值 && !isReadOnly(currentTask.任務ID) && item.單位或選項) saveItemResult(currentTask.任務ID, item.檢查ID, item.單位或選項, ins.id)">
+                                  <span class="font-bold text-blue-800 text-sm" x-text="item.單位或選項"></span>
+                                </div>
+                              </template>
+
+                              <!-- Component Photo Section -->
+                              <div x-show="requiresPhoto(item)" class="mt-2 pt-2 border-t border-slate-200">
+                                <div class="grid grid-cols-4 gap-2 sm:grid-cols-6">
+                                  <!-- 已存在照片 -->
+                                  <template
+                                    x-for="(p, pIdx) in (getResult(currentTask.任務ID, item.檢查ID, ins.id).相片ID || '').split(',').map(s => s.trim()).filter(Boolean)"
+                                    :key="p">
+                                    <div
+                                      class="relative aspect-square bg-white rounded-lg border border-slate-200 overflow-hidden group">
+                                      <img :src="'https://drive.google.com/thumbnail?id='+p+'&sz=120'"
+                                        referrerpolicy="no-referrer"
+                                        class="w-full h-full object-cover transition-transform group-active:scale-110 cursor-pointer"
+                                        @click="zoomPhoto(p, (getResult(currentTask.任務ID, item.檢查ID, ins.id).相片ID || '').split(',').map(s => s.trim()).filter(Boolean))" />
+                                      <button x-show="!isReadOnly(currentTask.任務ID) && !deletingPhotos.includes(p)"
+                                        @click.stop="deletePhoto(currentTask.任務ID, item.檢查ID, p, ins.id)"
+                                        class="absolute top-0.5 left-0.5 bg-red-500/85 hover:bg-red-600 text-white w-5 h-5 rounded-full backdrop-blur transition-all flex items-center justify-center">
+                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"
+                                            d="M6 18L18 6M6 6l12 12" />
+                                        </svg>
+                                      </button>
+                                      <!-- 刪除遮罩 -->
+                                      <template x-if="deletingPhotos.includes(p)">
+                                        <div
+                                          class="absolute inset-0 bg-black/60 flex items-center justify-center text-[9px] font-bold text-white">
+                                          刪除中</div>
+                                      </template>
+                                    </div>
+                                  </template>
+
+                                  <!-- 上傳中占位 -->
+                                  <template
+                                    x-for="u in (uploadingPhotos[currentTask.任務ID+'_'+item.檢查ID+'_'+ins.id] || [])"
+                                    :key="u.id">
+                                    <div
+                                      class="relative aspect-square bg-slate-100 rounded-lg border border-slate-200 overflow-hidden flex items-center justify-center opacity-70">
+                                      <img x-show="u.base64" :src="u.base64"
+                                        class="w-full h-full object-cover absolute inset-0 blur-[1px]" />
+                                      <span
+                                        class="text-[9px] font-black text-white bg-black/40 px-1 py-0.5 rounded drop-shadow-sm absolute z-10"
+                                        x-text="u.status"></span>
+                                    </div>
+                                  </template>
+
+                                  <!-- 新增按鈕 -->
+                                  <div class="relative aspect-square" x-show="!isReadOnly(currentTask.任務ID)">
+                                    <button @click="triggerUpload(currentTask.任務ID, item.檢查ID, ins.id)"
+                                      class="w-full h-full rounded-lg border border-dashed border-slate-300 bg-white hover:bg-slate-50 flex flex-col items-center justify-center gap-0.5 text-blue-600 active:scale-95 outline-none">
+                                      <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8" fill="none"
+                                        stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round"
+                                          d="M3 9a2 2 0 012-2h.93a2 2 0 001.66-.9l.82-1.2A2 2 0 019.07 4h5.86a2 2 0 011.66.9l.82 1.2a2 2 0 001.66.9H20a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V9z M12 15a3 3 0 100-6 3 3 0 000 6z" />
+                                      </svg>
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </template>
+                        </div>
+                      </template>
+
+                      <!-- 增設同樣檢查項目入口按鈕 -->
+                      <div class="pt-2 flex justify-end"
+                        x-show="!isReadOnly(currentTask.任務ID) && getMultiModeForTemplate(item.樣板代碼) === '動態實例'">
+                        <button @click="addInstance(currentTask.任務ID, item.檢查ID)"
+                          class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 hover:text-blue-800 text-xs font-black rounded-lg border border-blue-200 transition-colors shadow-sm">
+                          <span>➕ 新增日期或料號</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+              </div>
+
+              <div class="text-center py-4 px-2">
+                <p class="font-black text-blue-700 text-lg"
+                  x-text="getTaskProgress(currentTask.任務ID).total - getTaskProgress(currentTask.任務ID).filled === 0 ? '✨ 所有項目已完成檢查' : '剩餘 '+(getTaskProgress(currentTask.任務ID).total - getTaskProgress(currentTask.任務ID).filled)+' 個檢查項'">
+                </p>
+                <template
+                  x-if="currentTask['報告連結'] && String(currentTask['報告連結']).trim() !== '' && currentTask['報告連結'] !== 'null' && currentTask['報告連結'] !== 'undefined'">
+                  <a :href="currentTask['報告連結']" target="_blank"
+                    class="inline-flex items-center gap-1.5 px-4 py-2 mt-1 text-xs font-bold rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border border-emerald-200 transition-all select-none">
+                    <span>📋 查看自檢報告 (DOC)</span>
+                  </a>
+                </template>
+              </div>
+
+              <!-- Role-based Dynamic Workflow Action Buttons -->
+              <div class="mt-4 px-4 pb-8 max-w-md mx-auto flex flex-col gap-3">
+                <!-- Normal Mode / Field Personnel Actions -->
+                <template x-if="!isAdminMode">
+                  <div>
+                    <!-- Case 1: Active inspector work (not finished, checked, etc.) -->
+                    <template x-if="!['已提報結果', '已提交結果', '已審查結果', '已生成報告', '已結案'].includes(currentTask.報告狀態)">
+                      <div>
+                        <!-- 父任務卡 且 關聯的子任務尚未提交 → 顯示提示 -->
+                        <template
+                          x-if="currentTask.任務ID !== activeTask?.關聯工單 && activeTask?.關聯工單 && !['已提報結果', '已提交結果', '已審查結果', '已生成報告', '已結案'].includes((data.tasks.find(t => t.任務ID === activeTask.關聯工單) || {}).報告狀態)">
+                          <div class="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-center">
+                            <span class="text-amber-700 text-sm font-black flex items-center justify-center gap-2">
+                              <span>⚠️</span>
+                              <span>請先完成追蹤案件 <span x-text="activeTask.關聯工單" class="underline"></span> 的提交，再提交此工單</span>
+                            </span>
+                          </div>
+                        </template>
+
+                        <!-- 子任務卡、或無關聯工單、或子任務已提交 → 顯示提交按鈕 -->
+                        <template
+                          x-if="currentTask.任務ID === activeTask?.關聯工單 || !activeTask?.關聯工單 || ['已提報結果', '已提交結果', '已審查結果', '已生成報告', '已結案'].includes((data.tasks.find(t => t.任務ID === activeTask.關聯工單) || {}).報告狀態)">
+                          <button
+                            @click="finishTask(currentTask.任務ID, currentTask.任務ID === activeTask?.關聯工單 ? currentTask.關聯工單 : null)"
+                            class="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 active:scale-[0.98] transition-all text-white font-black rounded-2xl shadow-xl flex items-center justify-center gap-2">
+                            <div x-text="'📤'" class="w-5 h-5"></div>
+                            <span>處理完成，提交審查</span>
+                          </button>
+                        </template>
+                      </div>
+                    </template>
+
+                    <!-- Case 2: Locked text warning when task is submitted, pending admin review -->
+                    <template x-if="['已提報結果', '已提交結果'].includes(currentTask.報告狀態)">
+                      <div class="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-center">
+                        <span class="text-blue-700 text-sm font-black flex items-center justify-center gap-1.5">
+                          <div x-text="'ℹ️'" class="w-4 h-4 animate-pulse"></div>
+                          已提報結果，等待審核中
+                        </span>
+                      </div>
+                    </template>
+
+                    <!-- Case 3: Checked by admin, awaiting archive -->
+                    <template x-if="['已審查結果', '已生成報告'].includes(currentTask.報告狀態)">
+                      <div
+                        class="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-center flex flex-col gap-2 items-center">
+                        <span
+                          class="text-emerald-700 text-sm font-black flex items-center justify-center gap-1.5 w-full">
+                          <div x-text="'✅'" class="w-4 h-4"></div>
+                          管理員已審查通過！工單歸檔中
+                        </span>
+
+                      </div>
+                    </template>
+
+                    <!-- Case 4: Closed / Archived -->
+                    <template x-if="currentTask.報告狀態 === '已結案'">
+                      <div
+                        class="bg-slate-50 border border-slate-100 rounded-2xl p-4 text-center flex flex-col gap-2 items-center">
+                        <span class="text-slate-500 text-sm font-black flex items-center justify-center gap-1.5 w-full">
+                          <div x-text="'📦'" class="w-4 h-4"></div>
+                          此工單已結案歸檔
+                        </span>
+                        <template
+                          x-if="currentTask['結案連結'] && String(currentTask['結案連結']).trim() !== '' && currentTask['結案連結'] !== 'null' && currentTask['結案連結'] !== 'undefined'">
+                          <a :href="currentTask['結案連結']" target="_blank"
+                            class="inline-flex items-center gap-1.5 px-4 py-2 mt-1 text-xs font-bold rounded-xl bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition-all">
+                            <span>📄 下載結案 PDF</span>
+                          </a>
+                        </template>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+
+                <!-- Admin Mode / Reviewer Actions -->
+                <template x-if="isAdminMode">
+                  <div class="flex flex-col gap-3">
+                    <!-- Case 1: Dual buttons for audit (Reject / Approve) -->
+                    <template x-if="['已提報結果', '已提交結果', '未開始', '執行中', '退回修改'].includes(currentTask.報告狀態)">
+                      <div class="flex gap-3">
+                        <button @click="rejectTask(currentTask.任務ID)"
+                          class="flex-1 py-4 bg-white border-2 border-red-500 text-red-600 hover:bg-red-50 active:scale-[0.98] transition-all font-black rounded-2xl shadow-lg flex items-center justify-center gap-2">
+                          <div x-text="'❌'" class="w-5 h-5"></div>
+                          <span>退回修改</span>
+                        </button>
+                        <button @click="approveTask(currentTask.任務ID)"
+                          class="flex-1 py-4 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 active:scale-[0.98] transition-all text-white font-black rounded-2xl shadow-lg flex items-center justify-center gap-2">
+                          <div x-text="'✅'" class="w-5 h-5"></div>
+                          <span>審核通過</span>
+                        </button>
+                      </div>
+                    </template>
+
+                    <!-- Case 2: Actions for approved tasks (Generate Report / Archive) -->
+                    <template x-if="['已審查結果', '已生成報告'].includes(currentTask.報告狀態)">
+                      <div class="flex flex-col gap-3">
+                        <button @click="closeTask(currentTask.任務ID)"
+                          class="w-full py-4 bg-gradient-to-r from-slate-700 to-slate-800 hover:from-slate-800 hover:to-slate-900 active:scale-[0.98] transition-all text-white font-black rounded-2xl shadow-xl flex items-center justify-center gap-2">
+                          <div x-text="'📦'" class="w-5 h-5"></div>
+                          <span>任務完成，提交歸檔</span>
+                        </button>
+                      </div>
+                    </template>
+
+                    <!-- Case 3: Already Closed / Archived -->
+                    <template x-if="currentTask.報告狀態 === '已結案'">
+                      <div
+                        class="bg-slate-50 border border-slate-100 rounded-2xl p-4 text-center flex flex-col gap-2 items-center">
+                        <span class="text-slate-500 text-sm font-black flex items-center justify-center gap-1.5 w-full">
+                          <div x-text="'📦'" class="w-4 h-4"></div>
+                          此工單已結案歸檔
+                        </span>
+                        <template
+                          x-if="currentTask['結案連結'] && String(currentTask['結案連結']).trim() !== '' && currentTask['結案連結'] !== 'null' && currentTask['結案連結'] !== 'undefined'">
+                          <a :href="currentTask['結案連結']" target="_blank"
+                            class="inline-flex items-center gap-1.5 px-4 py-2 mt-1 text-xs font-bold rounded-xl bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition-all">
+                            <span>📄 下載結案 PDF</span>
+                          </a>
+                        </template>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template> <!-- 閉合 task-detail 下半部 template -->
+
+        </div>
+      </template>
+    </div>
+  </main>
+
+  <!-- Tabs Footer -->
+  <footer x-show="view === 'task-list'"
+    class="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-b-2 border-slate-200 p-1 sm:p-3 flex justify-around shadow-2xl text-xs">
+    <template x-for="t in (isAdminMode ? ['待審工單','工程管理','待歸檔'] : ['待辦工單','工程管理','近期完成'])">
+      <button @click="statusFilter = t" :class="statusFilter === t ? 'text-blue-600 scale-110' : 'text-slate-400'"
+        class="flex flex-col items-center gap-1 transition-all">
+        <span class="text-[13px] font-black flex items-center gap-1">
+          <span x-text="t"></span>
+          <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+            :class="statusFilter === t ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'"
+            x-text="getTabTaskCount(t)"></span>
+        </span>
+        <div x-show="statusFilter === t" class="w-6 h-1 bg-blue-600 rounded-full animate-pulse"></div>
+      </button>
+    </template>
+  </footer>
+
+  <!-- Zoom Modal -->
+  <div x-show="photoZoomUrl" x-data="{
+      startY: 0,
+      startX: 0,
+      diffY: 0,
+      diffX: 0,
+      isSwiping: false,
+      handleTouchStart(e) {
+        if (e.touches.length !== 1) return;
+        this.startY = e.touches[0].screenY;
+        this.startX = e.touches[0].screenX;
+        this.diffY = 0;
+        this.diffX = 0;
+        this.isSwiping = true;
+      },
+      handleTouchMove(e) {
+        if (!this.isSwiping || e.touches.length !== 1) return;
+        this.diffY = e.touches[0].screenY - this.startY;
+        this.diffX = e.touches[0].screenX - this.startX;
+      },
+      handleTouchEnd() {
+        if (!this.isSwiping) return;
+        this.isSwiping = false;
+        
+        // 1. Swipe down threshold (80px) to close image zoom
+        if (this.diffY > 80 && Math.abs(this.diffY) > Math.abs(this.diffX)) {
+          this.closeZoom();
+        } 
+        // 2. Swipe left / right threshold (60px) to navigate images
+        else if (Math.abs(this.diffX) > 60 && Math.abs(this.diffX) > Math.abs(this.diffY)) {
+          if (this.diffX < 0) {
+            this.navigateZoom('next');
+          } else {
+            this.navigateZoom('prev');
+          }
+        }
+        
+        this.diffY = 0;
+        this.diffX = 0;
+      }
+    }" @touchstart="handleTouchStart($event)" @touchmove="handleTouchMove($event)" @touchend="handleTouchEnd()"
+    class="fixed inset-0 z-[100] bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-between p-4 select-none touch-none animate-fade-in"
+    @click="closeZoom()">
+
+    <!-- Top Status Info Bar -->
+    <div class="w-full flex justify-between items-center text-white px-2 py-1 z-10" @click.stop>
+      <div class="text-xs font-black tracking-widest text-slate-300 uppercase">
+        <template x-if="zoomPhotosList.length > 0">
+          <span x-text="'相片 ' + (zoomPhotoIndex + 1) + ' / ' + zoomPhotosList.length"></span>
+        </template>
+      </div>
+      <button class="text-white hover:text-red-400 active:scale-90 transition-all p-2 rounded-full bg-white/10"
+        @click="closeZoom()">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="2.5" class="w-5 h-5">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Main Viewport containing Image and Side controls -->
+    <div class="relative flex-1 w-full flex items-center justify-center z-0" @click.stop>
+      <!-- Left side click trigger (Desktop pointer fallback) -->
+      <button x-show="zoomPhotosList.length > 1" @click="navigateZoom('prev')"
+        class="hidden sm:flex absolute left-4 w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 transition-all text-white items-center justify-center border border-white/10">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="3" class="w-5 h-5">
+          <polyline points="15 18 9 12 15 6"></polyline>
+        </svg>
+      </button>
+
+      <!-- Zoomed Image Container with Dynamic Spring Offset Translation feedback -->
+      <div
+        class="max-w-full max-h-[80vh] flex items-center justify-center overflow-hidden pointer-events-none transition-transform duration-200"
+        :style="'transform: translate3d(' + diffX + 'px, ' + diffY + 'px, 0)'">
+        <img :src="photoZoomUrl"
+          class="max-w-full max-h-[80vh] object-contain rounded-xl shadow-2xl border border-white/10 select-none" />
+      </div>
+
+      <!-- Right side click trigger (Desktop pointer fallback) -->
+      <button x-show="zoomPhotosList.length > 1" @click="navigateZoom('next')"
+        class="hidden sm:flex absolute right-4 w-12 h-12 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 transition-all text-white items-center justify-center border border-white/10">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="3" class="w-5 h-5">
+          <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Bottom Instructions Tip -->
+    <div
+      class="text-[11px] font-black tracking-wide text-slate-400 py-2 select-none pointer-events-none z-10 text-center"
+      @click.stop>
+      💡 可向左右滑動切換照片，或向下拖曳關閉預覽
+    </div>
+  </div>
+
+  <!-- Rejection Modal -->
+  <div x-show="rejectModalOpen" x-transition.opacity x-cloak
+    class="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4"
+    @click="rejectModalOpen = false">
+    <div class="bg-white rounded-3xl p-6 shadow-2xl max-w-sm w-full mx-4 border border-slate-100 text-center relative"
+      @click.stop>
+      <div class="w-12 h-12 bg-red-100 text-red-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+        <div x-text="'❌'" class="w-6 h-6"></div>
+      </div>
+      <h3 class="text-lg font-black text-slate-800 mb-1">退回修改工單</h3>
+      <p class="text-xs text-slate-400 mb-4">請填寫退回此工單的修改原因（選填）</p>
+
+      <textarea x-model="rejectReasonInput"
+        @focus="$event.target.scrollIntoView({ behavior: 'smooth', block: 'center' })"
+        class="w-full bg-slate-50 border-2 border-slate-300 rounded-2xl p-4 text-sm font-bold text-slate-800 outline-none focus:ring-4 focus:ring-red-100 focus:border-red-600 focus:bg-white transition-all mb-4 h-24 resize-none"
+        placeholder="請輸入具體的退回原因，以利巡檢員修改..."></textarea>
+
+      <div class="flex gap-2">
+        <button type="button" @click="rejectModalOpen = false"
+          class="flex-1 py-3 px-4 bg-slate-100 hover:bg-slate-200 active:scale-95 transition-all text-slate-700 rounded-2xl font-black text-sm">
+          取消
+        </button>
+        <button type="button" @click="submitRejectTask()"
+          class="flex-1 py-3 px-4 bg-red-600 hover:bg-red-700 active:scale-95 transition-all text-white rounded-2xl font-black text-sm shadow-md shadow-red-200">
+          確認退回
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Passcode Modal -->
+  <div x-show="passcodeModalOpen" x-transition.opacity x-cloak
+    class="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4"
+    @click="passcodeModalOpen = false">
+    <div class="bg-white rounded-3xl p-6 shadow-2xl max-w-[320px] w-full mx-4 border border-slate-200 text-center"
+      @click.stop>
+      <div class="w-12 h-12 bg-yellow-100 text-yellow-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+        <div class="w-6 h-6 flex items-center justify-center">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-6 h-6">
+            <path
+              d="M20 13c0 5-3.5 7.5-7.66 9.7a1 1 0 0 1-.68 0C7.5 20.5 4 18 4 13V6a1 1 0 0 1 .76-.97l8-2a1 1 0 0 1 .48 0l8 2A1 1 0 0 1 20 6z" />
+            <line x1="12" x2="12" y1="8" y2="12" />
+            <line x1="12" x2="12.01" y1="16" y2="16" />
+          </svg>
+        </div>
+      </div>
+      <h3 class="text-lg font-black text-slate-800 mb-1">進入審查模式</h3>
+      <p class="text-xs text-slate-500 mb-4 font-bold">請輸入管理密碼以驗證身分</p>
+
+      <form @submit.prevent="submitPasscode()">
+        <input type="password" x-model="passcodeInput" maxlength="4" inputmode="numeric" pattern="[0-9]*"
+          @focus="$event.target.scrollIntoView({ behavior: 'smooth', block: 'center' })"
+          class="w-full text-center tracking-[1em] text-2xl font-black bg-slate-50 border-2 border-slate-300 rounded-2xl py-3 px-4 focus:ring-4 focus:ring-yellow-100 focus:border-yellow-600 focus:outline-none mb-4 text-slate-900"
+          placeholder="••••" />
+
+        <div class="flex gap-2">
+          <button type="button" @click="passcodeModalOpen = false"
+            class="flex-1 py-3 px-4 bg-slate-100 hover:bg-slate-200 active:scale-95 transition-all text-slate-700 rounded-2xl font-black text-sm">
+            取消
+          </button>
+          <button type="submit"
+            class="flex-1 py-3 px-4 bg-yellow-500 hover:bg-yellow-600 active:scale-95 transition-all text-white rounded-2xl font-black text-sm shadow-md shadow-yellow-200">
+            驗證
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Floating Action Buttons (FAB) -->
+  <div x-show="view === 'task-list' && statusFilter === '工程管理'" x-transition.opacity x-cloak
+    class="fixed right-6 sm:right-12 bottom-12 z-40 flex flex-col gap-3">
+
+    <!-- Quick Task FAB (Admin Only) -->
+    <button @click="showQuickTaskModal()"
+      class="w-14 h-14 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white active:scale-95 rounded-full flex items-center justify-center shadow-2xl transition-all"
+      title="快速生成任務">
+      <span class="text-2xl font-black">⚡</span>
+    </button>
+  </div>
+
+  <!-- Floating Action Buttons (FAB) - Detail View -->
+  <div
+    x-show="view === 'task-detail' && activeTask && !activeTask.關聯工單 && activeTask.任務分類 !== '工程管理' && !isReadOnly(activeTask.任務ID)"
+    x-transition.opacity x-cloak class="fixed right-6 sm:right-12 bottom-12 z-40 flex flex-col gap-3">
+
+    <!-- Follow Up FAB -->
+    <button @click="showFollowUpModal(activeTask.任務ID)"
+      class="w-14 h-14 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white active:scale-95 rounded-full flex items-center justify-center shadow-2xl transition-all"
+      title="工單異常處理">
+      <span class="text-2xl font-black">📋</span>
+    </button>
+  </div>
+
+
+  <!-- Quick Task Modal -->
+  <div x-show="quickTaskModalOpen" x-transition.opacity x-cloak
+    class="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-md flex items-start sm:items-center justify-center p-2 sm:p-4"
+    @click="quickTaskModalOpen = false">
+    <div
+      class="bg-white rounded-3xl p-2 sm:p6 shadow-2xl max-w-md w-full mx-2 sm:mx-4 border border-slate-100 flex flex-col max-h-[85vh] relative"
+      @click.stop>
+      <!-- Title -->
+      <div class="flex items-center gap-2 mb-2 ">
+        <div class="w-8 h-8 rounded-xl flex items-center justify-center"
+          :class="isFollowUpMode ? 'bg-orange-100 text-orange-600' : 'bg-amber-100 text-amber-600'">
+          <span class="text-xl" x-text="isFollowUpMode ? '📋' : '⚡'"></span>
+        </div>
+        <h3 class="text-xl font-black text-slate-800" x-text="isFollowUpMode ? '工單異常處理' : '新增工程項目'"></h3>
+      </div>
+
+      <!-- Content Form (scrollable) -->
+      <div class="flex-1 overflow-y-auto pr-1 space-y-4 no-scrollbar">
+        <!-- 任務名稱 -->
+        <div>
+          <label class="block text-xs font-bold text-slate-500 mb-1">任務名稱 *</label>
+          <input type="text" x-model="qtName"
+            @focus="$event.target.scrollIntoView({ behavior: 'smooth', block: 'center' })"
+            class="w-full border-2 border-orange-200 bg-orange-50/50 rounded-2xl px-4 py-3 font-bold text-slate-900 outline-none focus:border-amber-600 focus:bg-white transition-colors placeholder:text-slate-400"
+            placeholder="請輸入任務名稱..." />
+        </div>
+
+        <!-- 樣板選單：一般模式篩選 預設任務=true；追蹤案件模式直接顯示選擇的樣板 -->
+        <div x-show="!isFollowUpMode">
+          <label class="block text-xs font-bold text-slate-400 mb-1">選擇表單 *</label>
+          <select x-model="qtTemplateCode" @change="handleQtTemplateChange($event.target.value)"
+            class="w-full bg-orange-50 border-2 border-orange-100 rounded-2xl px-4 py-3 font-bold text-slate-700 outline-none focus:border-amber-500 focus:bg-white transition-colors">
+            <option value="">-- 請選擇表單 --</option>
+            <template
+              x-for="t in data.templates?.filter(x => (x.預設任務 === true || x.預設任務 === 'TRUE' || x.預設任務 === 1 || x.預設任務 === 'true') && (!qtFilterCategory || x.任務分類 === qtFilterCategory))"
+              :key="t.樣板代碼">
+              <option :value="t.樣板代碼" x-text="t.樣板名稱"></option>
+            </template>
+          </select>
+        </div>
+
+        <!-- 追蹤案件模式：顯示固定樣板名稱 -->
+        <div x-show="isFollowUpMode" class="bg-orange-50 border border-orange-100 rounded-2xl px-4 py-3">
+          <p class="font-black text-orange-700 mt-0.5"
+            x-text="data.templates?.find(t => t.樣板代碼 === qtTemplateCode)?.樣板名稱 || '工單異常處理'"></p>
+        </div>
+
+
+        <!-- 負責人 -->
+        <div>
+          <label class="block text-xs font-bold text-slate-400 mb-1">指派負責人 *</label>
+          <select x-model="qtAssignee"
+            class="w-full bg-orange-50 border-2 border-orange-100 rounded-2xl px-4 py-3 font-bold text-slate-700 outline-none focus:border-amber-500 focus:bg-white transition-colors">
+            <option value="">-- 請選擇負責人 --</option>
+            <template x-for="s in data.staff" :key="s.人員姓名">
+              <option :value="s.人員姓名" x-text="s.人員姓名"></option>
+            </template>
+          </select>
+        </div>
+      </div>
+
+      <!-- Footer Actions -->
+      <div class="flex gap-2 mt-6 pt-4 border-t border-slate-100">
+        <button type="button" @click="quickTaskModalOpen = false" :disabled="syncing"
+          class="flex-1 py-3.5 px-4 bg-slate-100 hover:bg-slate-200 active:scale-95 transition-all text-slate-600 rounded-2xl font-black text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+          取消
+        </button>
+        <button type="button" @click="submitQuickTask()" :disabled="syncing"
+          class="flex-1 py-3.5 px-4 bg-amber-500 hover:bg-amber-600 shadow-amber-100 text-white rounded-2xl font-black text-sm shadow-md active:scale-95 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed">
+          <template x-if="syncing">
+            <svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none"
+              viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
+              </path>
+            </svg>
+          </template>
+          <span x-text="syncing ? '處理中...' : '生成任務'"></span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <input type="file" id="global-photo-upload" accept="image/*" multiple class="hidden"
+    @change="handlePhotoUpload($event)" />
+
+  <!-- Toast Container -->
+  <div
+    class="fixed bottom-12 left-1/2 -translate-x-1/2 z-[10000] flex flex-col gap-2 w-full max-w-[300px] pointer-events-none">
+    <template x-for="t in toasts" :key="t.id">
+      <div x-transition:enter="transition ease-out duration-300"
+        x-transition:enter-start="opacity-0 transform translate-y-4"
+        x-transition:enter-end="opacity-100 transform translate-y-0"
+        x-transition:leave="transition ease-in duration-200"
+        x-transition:leave-start="opacity-100 transform translate-y-0"
+        x-transition:leave-end="opacity-0 transform translate-y-4" :class="{
+             'bg-green-600': t.type === 'success',
+             'bg-red-600': t.type === 'error',
+             'bg-blue-600': t.type === 'info'
+           }" class="px-5 py-3 rounded-2xl shadow-2xl text-white font-black text-sm text-center pointer-events-auto"
+        x-text="t.message">
+      </div>
+    </template>
+  </div>
+
+</body>
+
+</html>
