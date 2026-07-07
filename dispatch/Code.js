@@ -6,7 +6,7 @@
  * 由「流程設定」工作表驅動所有狀態 (State) 與動作 (Action) 轉換
  */
 
-const SCRIPT_VERSION = "v3.0.0-FSM";
+const SCRIPT_VERSION = "v3.0.1-FSM";
 const SHEET_MASTER = "收發文主表";
 const SHEET_TRACKING = "進度追蹤表";
 const SHEET_CONFIG = "系統設定";
